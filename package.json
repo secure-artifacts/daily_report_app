@@ -1,0 +1,57 @@
+{
+  "name": "daily-report-app",
+  "version": "1.0.0",
+  "description": "Desktop daily report and team review app with local Google Drive folder sync.",
+  "author": "Daily Report App",
+  "private": false,
+  "main": "electron-main.cjs",
+  "scripts": {
+    "software": "electron .",
+    "start": "electron .",
+    "check": "node --check app.js && node --check electron-main.cjs && node --check electron-preload.cjs",
+    "build:win": "electron-builder --win --x64",
+    "dist": "npm run build:win"
+  },
+  "build": {
+    "appId": "com.dailyreport.app",
+    "productName": "Daily Report App",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "index.html",
+      "styles.css",
+      "app.js",
+      "electron-main.cjs",
+      "electron-preload.cjs",
+      "README.md",
+      "package.json",
+      "!report_data.json",
+      "!desktop_settings.json",
+      "!sheet_backups/**",
+      "!backups/**",
+      "!__pycache__/**",
+      "!*.log"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "daily-report-app-setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "daily-report-app-portable-${version}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1"
+  }
+}
