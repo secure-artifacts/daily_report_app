@@ -9,6 +9,7 @@ const defaultData = {
   groupItems: {},
   memberItems: {},
   memberQuotas: {},
+  dailyQuotas: {},
   adminPassword: "999",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
@@ -55,6 +56,7 @@ function normalize(source) {
     if (!Array.isArray(groupItems[group])) groupItems[group] = Object.keys(rules);
   });
   const memberQuotas = { ...(loaded.memberQuotas || {}) };
+  const dailyQuotas = loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {};
   return {
     ...clone(defaultData),
     ...loaded,
@@ -67,6 +69,7 @@ function normalize(source) {
     groupItems,
     memberItems,
     memberQuotas,
+    dailyQuotas,
     adminPassword: String(loaded.adminPassword || defaultData.adminPassword),
     sheetBackupEnabled: loaded.sheetBackupEnabled !== false,
     backupCleanupEnabled: loaded.backupCleanupEnabled === true,
@@ -129,6 +132,22 @@ function newerRecord(a, b) {
   if (!b) return a;
   return String(a.updated_at || "") >= String(b.updated_at || "") ? a : b;
 }
+function mergeDailyQuotas(remoteDaily = {}, localDaily = {}, mode = "records") {
+  const merged = {};
+  const days = new Set([...Object.keys(remoteDaily || {}), ...Object.keys(localDaily || {})]);
+  days.forEach((day) => {
+    const remote = remoteDaily?.[day] || {};
+    const local = localDaily?.[day] || {};
+    merged[day] = {
+      default: mode === "admin" ? (local.default ?? "") : (remote.default ?? local.default ?? ""),
+      members: {
+        ...(remote.members || {}),
+        ...(local.members || {})
+      }
+    };
+  });
+  return merged;
+}
 function mergeCloudData(remoteSource, localSource, mode = "records") {
   if (!remoteSource) return normalize(localSource);
   const remote = normalize(remoteSource);
@@ -146,6 +165,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.groupItems = clone(local.groupItems || {});
     merged.memberItems = clone(local.memberItems || {});
     merged.memberQuotas = clone(local.memberQuotas || {});
+    merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.quota = Number(local.quota || 0);
     merged.adminPassword = String(local.adminPassword || "999");
     merged.sheetBackupEnabled = local.sheetBackupEnabled !== false;
@@ -160,6 +180,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.groupItems = clone(remote.groupItems || local.groupItems || {});
     merged.memberItems = clone(remote.memberItems || local.memberItems || {});
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
+    merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
     merged.adminPassword = String(remote.adminPassword || local.adminPassword || "999");
     merged.sheetBackupEnabled = remote.sheetBackupEnabled !== false;
@@ -281,9 +302,36 @@ function scheduleSave(mode = "records") {
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => persistEverywhere(mode), 180);
 }
-function memberQuota(member) {
-  const own = data.memberQuotas?.[member];
-  return own === "" || own === undefined || own === null ? Number(data.quota || 0) : Number(own);
+function dailyQuotaEntry(day = currentDate) {
+  if (!data.dailyQuotas || typeof data.dailyQuotas !== "object") data.dailyQuotas = {};
+  if (!data.dailyQuotas[day]) data.dailyQuotas[day] = { default: "", members: {} };
+  if (!data.dailyQuotas[day].members) data.dailyQuotas[day].members = {};
+  return data.dailyQuotas[day];
+}
+function quotaValue(value) {
+  return value === "" || value === undefined || value === null ? null : Number(value);
+}
+function memberQuota(member, day = currentDate) {
+  const daily = data.dailyQuotas?.[day];
+  const dailyOwn = quotaValue(daily?.members?.[member]);
+  if (dailyOwn !== null) return dailyOwn;
+  const dailyDefault = quotaValue(daily?.default);
+  if (dailyDefault !== null) return dailyDefault;
+  const own = quotaValue(data.memberQuotas?.[member]);
+  return own === null ? Number(data.quota || 0) : own;
+}
+function setDailyDefaultQuota(day, value) {
+  const entry = dailyQuotaEntry(day);
+  entry.default = value === "" ? "" : Number(value || 0);
+}
+function setDailyMemberQuota(member, day, value) {
+  const entry = dailyQuotaEntry(day);
+  if (value === "") delete entry.members[member];
+  else entry.members[member] = Number(value || 0);
+}
+function dailyMemberQuotaValue(member, day = currentDate) {
+  const value = data.dailyQuotas?.[day]?.members?.[member];
+  return value === undefined || value === null ? "" : Number(value);
 }
 function groupMembers(group) {
   return data.members.filter((member) => (data.memberGroups?.[member] || data.groups[0]) === group);
@@ -321,7 +369,7 @@ function aggregatePeriod(days, scope, member) {
       const memberItems = rec?.items || {};
       weighted += Number(rec?.weighted_total || 0);
       raw += Number(rec?.raw_total || 0);
-      quota += memberQuota(name);
+      quota += memberQuota(name, day);
       itemNames.forEach((item) => {
         itemTotals[item] += Number(memberItems[item] || 0);
       });
@@ -470,6 +518,7 @@ function preview() {
   $("auditCard").className = `metric ${passed ? "pass" : "fail"}`;
   $("statusPill").textContent = passed ? "达标 ✓" : "不达标";
   $("statusPill").className = `status ${passed ? "pass" : "fail"}`;
+  if ($("dailyQuotaInput")) $("dailyQuotaInput").placeholder = fmt(memberQuota(currentMember, currentDate));
   $("previewBody").innerHTML = Object.entries(parsed.items).map(([name, amount]) => {
     const weight = Number(data.rules[name] ?? 1);
     return `<tr><td>${escapeHtml(name)}</td><td>${fmt(amount)}</td><td>${fmt(weight)}</td><td>${fmt(amount * weight)}</td></tr>`;
@@ -479,6 +528,10 @@ function loadForm() {
   const rec = currentRecord();
   $("dateInput").value = currentDate;
   $("quotaInput").value = String(data.quota);
+  if ($("dailyQuotaInput")) {
+    $("dailyQuotaInput").value = dailyMemberQuotaValue(currentMember, currentDate);
+    $("dailyQuotaInput").placeholder = fmt(memberQuota(currentMember, currentDate));
+  }
   $("entryText").value = rec.text || "";
   renderEntryInputs(Object.keys(rec.items || {}).length ? rec.items : parseEntry(rec.text || "").items);
   $("statusSelect").value = ["自动判断", "达标", "不达标", "待审核"].includes(rec.status) ? rec.status : "自动判断";
@@ -489,6 +542,7 @@ function loadForm() {
 }
 function saveFormSilently() {
   data.quota = Number($("quotaInput").value || 0);
+  if ($("dailyQuotaInput")) setDailyMemberQuota(currentMember, currentDate, $("dailyQuotaInput").value);
   const items = readEntryInputs();
   const parsed = { items, ...entryTotals(items) };
   $("entryText").value = itemsToText(items);
@@ -505,6 +559,7 @@ function saveFormSilently() {
     text: itemsToText(items),
     raw_total: parsed.raw,
     weighted_total: parsed.weighted,
+    quota_total: quota,
     status: finalStatus,
     reason: $("reasonText").value.trim(),
     harvest: $("harvestText").value.trim(),
@@ -613,19 +668,34 @@ function renderRules() {
 }
 function renderMemberQuotas() {
   $("memberQuotaBox").innerHTML = "";
+  const selectedDay = $("adminQuotaDate")?.value || currentDate;
+  if ($("adminQuotaDate")) $("adminQuotaDate").value = selectedDay;
+  if ($("dateQuotaInput")) {
+    const value = data.dailyQuotas?.[selectedDay]?.default;
+    $("dateQuotaInput").value = value === undefined || value === null ? "" : value;
+    $("dateQuotaInput").placeholder = fmt(data.quota);
+  }
   data.members.forEach((name) => {
     const row = document.createElement("div");
     row.className = "quota-row";
     const own = data.memberQuotas[name] ?? "";
+    const dayOwn = data.dailyQuotas?.[selectedDay]?.members?.[name];
     row.innerHTML = `
       <input value="${escapeAttr(name)}" aria-label="成员">
       <input type="number" step="0.01" min="0" placeholder="${fmt(data.quota)}" value="${own === "" ? "" : Number(own)}" aria-label="成员定额">
+      <input type="number" step="0.01" min="0" placeholder="${fmt(memberQuota(name, selectedDay))}" value="${dayOwn === undefined || dayOwn === null ? "" : Number(dayOwn)}" aria-label="当天定额">
       <button class="icon" title="删除成员">×</button>
     `;
     const inputs = row.querySelectorAll("input");
     inputs[0].onchange = () => renameMember(name, inputs[0].value.trim());
     inputs[1].oninput = () => {
       data.memberQuotas[name] = inputs[1].value === "" ? "" : Number(inputs[1].value);
+      renderOverview();
+      scheduleSave("admin");
+    };
+    inputs[2].oninput = () => {
+      setDailyMemberQuota(name, selectedDay, inputs[2].value);
+      preview();
       renderOverview();
       scheduleSave("admin");
     };
@@ -741,6 +811,12 @@ function renameMember(oldName, newName) {
     data.memberItems[newName] = data.memberItems[oldName];
     delete data.memberItems[oldName];
   }
+  Object.values(data.dailyQuotas || {}).forEach((entry) => {
+    if (entry.members && entry.members[oldName] !== undefined) {
+      entry.members[newName] = entry.members[oldName];
+      delete entry.members[oldName];
+    }
+  });
   Object.entries(data.records).forEach(([key, record]) => {
     if (record.member !== oldName) return;
     const nextKey = `${record.date}|${newName}`;
@@ -773,6 +849,9 @@ function removeMember(name) {
   delete data.memberQuotas[name];
   delete data.memberGroups[name];
   delete data.memberItems[name];
+  Object.values(data.dailyQuotas || {}).forEach((entry) => {
+    if (entry.members) delete entry.members[name];
+  });
   if (currentMember === name) currentMember = data.members[0];
   loadForm();
   render();
@@ -783,7 +862,7 @@ function renderOverview() {
   const itemNames = configuredItems();
   const rows = data.members.map((member) => {
     const rec = data.records[`${currentDate}|${member}`];
-    const quota = memberQuota(member);
+    const quota = memberQuota(member, currentDate);
     const weighted = Number(rec?.weighted_total || 0);
     const status = rec?.status || "待审核";
     const passed = status === "达标" || weighted >= quota;
@@ -1000,7 +1079,7 @@ function renderPersonalTable(days, aggregate, scope, member) {
       const rec = recordFor(day, name);
       const items = rec?.items || {};
       const weighted = Number(rec?.weighted_total || 0);
-      const quota = memberQuota(name);
+      const quota = memberQuota(name, currentDate);
       rows.push(`
         <tr>
           <td>${escapeHtml(day)}</td>
@@ -1236,7 +1315,7 @@ function buildThreeMonthWorkbookXml() {
   const records = recordsInLastMonths(3);
   const header = ["日期", "成员", "分组", ...itemNames, "原始", "换算", "定额", "差额", "状态", "备注"];
   const recordRow = (rec) => {
-    const quota = memberQuota(rec.member);
+    const quota = memberQuota(rec.member, rec.date);
     return [
       rec.date,
       rec.member,
@@ -1254,7 +1333,7 @@ function buildThreeMonthWorkbookXml() {
   data.members.forEach((member) => {
     const own = records.filter((rec) => rec.member === member);
     const weighted = own.reduce((sum, rec) => sum + Number(rec.weighted_total || 0), 0);
-    const quota = own.reduce((sum) => sum + memberQuota(member), 0);
+    const quota = own.reduce((sum, rec) => sum + memberQuota(member, rec.date), 0);
     summaryRows.push([
       member,
       data.memberGroups?.[member] || "",
@@ -1287,7 +1366,7 @@ function buildCsvBackups() {
   Object.values(data.records)
     .sort((a, b) => `${a.date}|${a.member}`.localeCompare(`${b.date}|${b.member}`))
     .forEach((rec) => {
-      const quota = memberQuota(rec.member);
+      const quota = memberQuota(rec.member, rec.date);
       rows.push([
         rec.date,
         rec.member,
@@ -1304,7 +1383,7 @@ function buildCsvBackups() {
   data.members.forEach((member) => {
     const records = Object.values(data.records).filter((rec) => rec.member === member);
     const weighted = records.reduce((sum, rec) => sum + Number(rec.weighted_total || 0), 0);
-    const quota = records.reduce((sum) => sum + memberQuota(member), 0);
+    const quota = records.reduce((sum, rec) => sum + memberQuota(member, rec.date), 0);
     summary.push([
       member,
       weighted,
@@ -1397,6 +1476,21 @@ function bindEvents() {
   };
   $("quotaInput").oninput = () => {
     data.quota = Number($("quotaInput").value || 0);
+    preview();
+    renderOverview();
+    scheduleSave("admin");
+  };
+  $("dailyQuotaInput").oninput = () => {
+    setDailyMemberQuota(currentMember, currentDate, $("dailyQuotaInput").value);
+    preview();
+    renderOverview();
+    persistLocal();
+  };
+  $("adminQuotaDate").value = currentDate;
+  $("adminQuotaDate").onchange = renderMemberQuotas;
+  $("dateQuotaInput").oninput = () => {
+    setDailyDefaultQuota($("adminQuotaDate").value || currentDate, $("dateQuotaInput").value);
+    renderMemberQuotas();
     preview();
     renderOverview();
     scheduleSave("admin");

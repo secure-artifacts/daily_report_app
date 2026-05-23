@@ -51,6 +51,7 @@
           <section class="cards">
             <div class="metric"><span>日期</span><strong><input id="dateInput" type="date"></strong></div>
             <div class="metric"><span>成员</span><strong id="memberCard">成员A</strong></div>
+            <div class="metric quota-edit"><span>今日定额</span><strong><input id="dailyQuotaInput" type="number" step="0.01" min="0" placeholder="自动"></strong></div>
             <div class="metric"><span>原始</span><strong id="rawTotal">0</strong></div>
             <div class="metric"><span>换算</span><strong id="weightedTotal">0</strong></div>
             <div class="metric" id="auditCard"><span>审核</span><strong id="auditText">待审核</strong></div>
@@ -201,6 +202,12 @@
             </div>
             <div class="panel">
               <div class="panel-head"><h2>成员定额</h2><span class="hint">留空则使用默认定额</span></div>
+              <div class="form-grid quota-date-grid">
+                <label for="adminQuotaDate">定额日期</label>
+                <input id="adminQuotaDate" type="date">
+                <label for="dateQuotaInput">当天默认定额</label>
+                <input id="dateQuotaInput" type="number" step="0.01" min="0" placeholder="留空则使用长期默认">
+              </div>
               <div id="memberQuotaBox"></div>
             </div>
           </section>
