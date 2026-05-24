@@ -1,0 +1,11 @@
+{
+  "name": "daily-report-app",
+  "version": "2.0.0",
+  "description": "Deployable web daily report and team review app with cloud JSON storage.",
+  "author": "Daily Report App",
+  "private": false,
+  "scripts": {
+    "start": "node server.cjs",
+    "check": "node --check app.js && node --check server.cjs"
+  }
+}

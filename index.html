@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小组报数日记</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="lock-screen" id="lockScreen">
+    <div class="lock-box">
+      <h2>小组报数日记</h2>
+      <p>请输入云端访问密码</p>
+      <input id="appPasswordInput" type="password" placeholder="默认 999">
+      <button class="primary" id="unlockBtn">进入</button>
+      <small id="lockHint"></small>
+    </div>
+  </div>
+  <div class="app" id="app">
+    <header class="topbar">
+      <div class="brand">
+        <h1>小组报数日记</h1>
+        <small id="syncLabel">云端未解锁</small>
+      </div>
+      <nav class="tabs" aria-label="视图">
+        <button class="tab active" data-view="entry">今日</button>
+        <button class="tab" data-view="overview">整体预览</button>
+        <button class="tab" data-view="admin">管理员</button>
+      </nav>
+      <div class="actions">
+        <label class="switch"><input type="checkbox" id="compactToggle"> 小巧</label>
+        <button id="openFileBtn" title="从云端重新读取最新数据">云端刷新</button>
+        <button id="sheetBackupBtn" title="生成可用 Google 表格打开的表格文件">表格导出</button>
+        <button class="hidden" id="backupBtn" title="网页端不使用本地备份">备份</button>
+        <button class="hidden" id="exportBtn" title="导出当前数据">导出</button>
+        <button class="hidden" id="importBtn" title="导入 JSON">导入</button>
+        <button class="primary" id="saveBtn">提交</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <aside class="sidebar">
+        <div class="side-title">分组成员</div>
+        <div class="members" id="memberList"></div>
+        <input class="hidden" id="memberName" placeholder="新增成员">
+        <button class="hidden" id="addMemberBtn" title="添加成员">+</button>
+      </aside>
+
+      <main class="main">
+        <section class="view active" id="entryView">
+          <section class="cards">
+            <div class="metric"><span>日期</span><strong><input id="dateInput" type="date"></strong></div>
+            <div class="metric"><span>成员</span><strong id="memberCard">成员A</strong></div>
+            <div class="metric quota-edit"><span>今日定额</span><strong><input id="dailyQuotaInput" type="number" step="0.01" min="0" placeholder="自动"></strong></div>
+            <div class="metric"><span>原始</span><strong id="rawTotal">0</strong></div>
+            <div class="metric"><span>换算</span><strong id="weightedTotal">0</strong></div>
+            <div class="metric" id="auditCard"><span>审核</span><strong id="auditText">待审核</strong></div>
+          </section>
+
+          <section class="panel checkin-panel">
+            <div class="panel-head"><h2>早中晚打卡</h2><span class="hint">选项由管理员维护</span></div>
+            <div class="checkin-grid" id="checkinInputs"></div>
+          </section>
+
+          <section class="grid-2">
+            <div class="panel">
+              <div class="panel-head">
+                <h2>今日报数</h2>
+                <div class="inline-actions">
+                  <button class="tab mini active" id="selectedItemsBtn">只显示选中</button>
+                  <button class="tab mini" id="allItemsBtn">全部显示</button>
+                </div>
+              </div>
+              <div class="entry-inputs" id="entryInputs"></div>
+              <textarea class="hidden" id="entryText" aria-hidden="true"></textarea>
+              <table>
+                <thead><tr><th>项目</th><th>数量</th><th>换算</th><th>计入</th></tr></thead>
+                <tbody id="previewBody"></tbody>
+              </table>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h2>审核栏与日记</h2><span class="status pending" id="statusPill">待审核</span></div>
+              <div class="form-grid">
+                <label for="statusSelect">状态</label>
+                <select id="statusSelect">
+                  <option>自动判断</option>
+                  <option>达标</option>
+                  <option>不达标</option>
+                  <option>待审核</option>
+                </select>
+                <label for="reasonText">原因/备注</label>
+                <textarea id="reasonText" placeholder="不达标原因、补救计划、审核备注..."></textarea>
+                <label for="harvestText">收获</label>
+                <textarea id="harvestText" placeholder="达标后的收获、心得、明天计划..."></textarea>
+                <label for="diaryText">日记</label>
+                <textarea id="diaryText" placeholder="当天过程、问题、灵感和复盘。"></textarea>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="overviewView">
+          <section class="overview-hero">
+            <div>
+              <span class="eyebrow">整体预览</span>
+              <h2 id="overviewTitle">今日达标情况</h2>
+            </div>
+            <div class="overview-date">
+              <label>查看日期 <input id="overviewDateInput" type="date"></label>
+            </div>
+            <div class="overview-stats">
+              <div><span>达标</span><strong id="passCount">0</strong></div>
+              <div><span>未达标</span><strong id="failCount">0</strong></div>
+              <div><span>完成率</span><strong id="passRate">0%</strong></div>
+              <div><span>小组合计</span><strong id="teamTotal">0</strong></div>
+              <div><span>总定额</span><strong id="teamQuota">0</strong></div>
+              <div><span>总差额</span><strong id="teamDiff">0</strong></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>各组打卡情况</h2><span class="hint">按早中晚汇总统计</span></div>
+            <div class="checkin-summary-grid" id="groupCheckinSummary"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>成员达标表</h2><span class="hint" id="overviewHint"></span></div>
+            <div class="member-grid" id="overviewGrid"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>项目明细</h2><span class="hint" id="detailHint"></span></div>
+            <div class="table-scroll">
+              <table>
+                <thead id="detailHead"></thead>
+                <tbody id="detailBody"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>效率分析</h2>
+              <span class="hint" id="analysisHint"></span>
+            </div>
+            <div class="analysis-controls">
+              <select id="analysisScope">
+                <option value="team">团队</option>
+                <option value="group">分组</option>
+                <option value="member">个人</option>
+              </select>
+              <select id="analysisGroup"></select>
+              <select id="analysisMember"></select>
+              <select id="analysisRange">
+                <option value="2">近 2 天</option>
+                <option value="7">近 7 天</option>
+                <option value="30">近 30 天</option>
+              </select>
+              <input id="analysisCustomDays" type="number" min="1" max="62" step="1" placeholder="自定义天数">
+              <select id="analysisCompare">
+                <option value="previous">当前 N 天 vs 前 N 天</option>
+                <option value="thisWeek">本周累计</option>
+                <option value="lastMonth">对比上月同期</option>
+              </select>
+            </div>
+            <div class="date-controls">
+              <label>开始 <input id="rangeStart" type="date"></label>
+              <label>结束 <input id="rangeEnd" type="date"></label>
+            </div>
+            <div class="analysis-summary" id="analysisSummary"></div>
+            <details class="compare-panel" open>
+              <summary>对比栏目</summary>
+              <div class="analysis-summary" id="compareSummary"></div>
+              <div class="chart" id="compareChart"></div>
+            </details>
+            <div class="chart" id="analysisChart"></div>
+            <div class="line-chart" id="analysisLineChart"></div>
+            <div class="chart compact-chart" id="analysisItemChart"></div>
+            <div class="viz-grid">
+              <div class="treemap" id="analysisTreemap"></div>
+              <div class="progress-blocks" id="analysisBlocks"></div>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead id="personalHead"></thead>
+                <tbody id="personalBody"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>小组记录总览</h2><span class="hint" id="historyCount"></span></div>
+            <table>
+              <thead><tr><th>日期</th><th>成员</th><th>原始</th><th>换算</th><th>状态</th><th>备注</th></tr></thead>
+              <tbody id="historyBody"></tbody>
+            </table>
+          </section>
+        </section>
+
+        <section class="view" id="adminView">
+          <section class="admin-grid">
+            <div class="panel">
+              <div class="panel-head">
+                <h2>项目与换算</h2>
+                <div class="inline-actions">
+                  <button id="addRuleBtn">新增项目</button>
+                  <button class="primary" id="adminSaveBtn">保存配置</button>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label for="quotaInput">默认定额</label>
+                <input id="quotaInput" type="number" step="0.01" min="0">
+              </div>
+              <div id="rulesBox"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>成员定额</h2><span class="hint">留空则使用默认定额</span></div>
+              <div class="form-grid quota-date-grid">
+                <label for="adminQuotaDate">定额日期</label>
+                <input id="adminQuotaDate" type="date">
+                <label for="dateQuotaInput">当天默认定额</label>
+                <input id="dateQuotaInput" type="number" step="0.01" min="0" placeholder="留空则使用长期默认">
+              </div>
+              <div id="memberQuotaBox"></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>成员与分组</h2><span class="hint">可新增成员、分组、调整成员顺序</span></div>
+            <div class="add-member admin-add">
+              <input id="adminMemberName" placeholder="新增成员">
+              <button class="icon" id="adminAddMemberBtn" title="添加成员">+</button>
+            </div>
+            <div class="add-member admin-add">
+              <input id="groupNameInput" placeholder="新增分组">
+              <button class="icon" id="addGroupBtn" title="添加分组">+</button>
+            </div>
+            <div id="memberGroupBox"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>分组项目配置</h2><span class="hint">成员默认按所在组匹配需要填写的项目</span></div>
+            <div class="analysis-controls">
+              <select id="itemConfigGroup"></select>
+              <button id="selectAllGroupItemsBtn">全选</button>
+              <button id="clearGroupItemsBtn">清空</button>
+            </div>
+            <div class="item-check-grid" id="groupItemConfigBox"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>打卡选项</h2><span class="hint">默认：准时上线、迟到</span></div>
+            <div class="add-member admin-add">
+              <input id="checkinOptionInput" placeholder="新增打卡选项">
+              <button class="icon" id="addCheckinOptionBtn" title="添加打卡选项">+</button>
+            </div>
+            <div class="option-list" id="checkinOptionBox"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>权限</h2><span class="hint">默认密码 999</span></div>
+            <div class="form-grid">
+              <label for="autoAuditToggle">自动审核</label>
+              <label class="switch-light"><input id="autoAuditToggle" type="checkbox"> 提交后自动判断达标</label>
+              <label for="adminPasswordInput">新密码</label>
+              <input id="adminPasswordInput" type="password" placeholder="留空则不修改">
+              <label for="sheetBackupToggle">表格导出</label>
+              <label class="switch-light"><input id="sheetBackupToggle" type="checkbox"> 提交后允许生成 3 个月表格</label>
+              <label class="hidden" for="backupCleanupToggle">本地清理</label>
+              <label class="switch-light hidden"><input id="backupCleanupToggle" type="checkbox"> 不使用</label>
+              <label class="hidden" for="autoUpdateToggle">网页更新</label>
+              <label class="switch-light hidden"><input id="autoUpdateToggle" type="checkbox"> 不使用</label>
+            </div>
+            <div class="update-row hidden">
+              <div>
+                <strong>网页更新状态</strong>
+                <span id="updateStatusText">通过服务器部署更新</span>
+              </div>
+              <button id="checkUpdateBtn">检查更新</button>
+              <button class="primary" id="installUpdateBtn" disabled>重启更新</button>
+            </div>
+            <div class="message-grid">
+              <label>达标随机文案<textarea id="passMessagesInput"></textarea></label>
+              <label>不达标随机文案<textarea id="failMessagesInput"></textarea></label>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>云端存储</h2><span class="hint" id="adminSaveStatus">浏览器不保存本地缓存</span></div>
+            <div class="backup-list" id="backupList"></div>
+          </section>
+        </section>
+      </main>
+    </section>
+  </div>
+
+  <input class="hidden" id="importFile" type="file" accept="application/json,.json">
+  <div class="dialog-backdrop" id="dialog">
+    <div class="dialog">
+      <h3 id="dialogTitle"></h3>
+      <p id="dialogMessage"></p>
+      <textarea id="dialogText"></textarea>
+      <div class="dialog-actions">
+        <button id="dialogSkip">稍后</button>
+        <button class="primary" id="dialogSave">写入记录</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
