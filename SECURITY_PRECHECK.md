@@ -1,6 +1,6 @@
 # 安全预检记录
 
-预检日期：2026-05-24
+预检日期：2026-05-25
 
 ## 当前部署形态
 
@@ -19,6 +19,42 @@
 - `.github/workflows/codeql.yml` 执行 JavaScript/TypeScript CodeQL 扫描。
 - `.github/workflows/release.yml` 在 tag `v*` 上打包 Release zip，并使用 `actions/attest-build-provenance@v2` 生成安全构建证明。
 - 高级管理员汇总功能只读取用户显式选择的来源文件夹和汇总文件夹，不会扫描任意本地目录。
+
+## GitHub 预检结果
+
+- 目标仓库：`secure-artifacts/daily_report_app`
+- 推送分支：`main`
+- 最新提交：`fe9243db31384b8f83e3ebf5c9f7485fbfcc843d`
+- Release 标签：`v2.0.1`
+- Release 页面：https://github.com/secure-artifacts/daily_report_app/releases/tag/v2.0.1
+- Release 创建者：`github-actions[bot]`
+- Release 资产：`daily-report-app-v2.0.1.zip`
+- Release 资产 SHA-256：`7701861644dadd7ffcf3e3374160cc13773c9981519c768631177f4bcf8e02ef`
+- 构建证明：GitHub Attestations API 已返回 provenance bundle，predicate type 为 `https://slsa.dev/provenance/v1`。
+
+## GitHub Actions 结果
+
+- Code Audit：成功  
+  https://github.com/secure-artifacts/daily_report_app/actions/runs/26397926567
+- Build and Release：成功  
+  https://github.com/secure-artifacts/daily_report_app/actions/runs/26397926488
+- CodeQL：成功  
+  https://github.com/secure-artifacts/daily_report_app/actions/runs/26397913454
+
+## 告警查询状态
+
+以下 GitHub 安全告警 API 使用匿名访问会返回 401，需要仓库权限 Token 或在 GitHub 页面中查看：
+
+- Code scanning alerts
+- Secret scanning alerts
+- Dependabot alerts
+
+已完成的替代验证：
+
+- CodeQL workflow 成功执行。
+- `npm audit --audit-level=moderate` 本地和 CI 均通过。
+- Release 产物由 GitHub Actions bot 上传。
+- Release 产物已生成 SLSA provenance 构建证明。
 
 ## 本次功能变更审计
 
