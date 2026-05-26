@@ -273,6 +273,17 @@
               <button class="primary" id="syncSummaryFolderBtn">同步到汇总</button>
             </div>
             <div class="summary-folder-box" id="summaryFolderBox"></div>
+            <div class="cloud-backup-panel">
+              <div class="panel-head compact-head"><h3>云数据库备份</h3><span class="hint">口令只在本次页面打开期间使用</span></div>
+              <div class="sync-status-grid" id="cloudBackupStatusBox"></div>
+              <div class="cloud-backup-actions">
+                <input id="cloudBackupTokenInput" type="password" placeholder="云备份口令">
+                <select id="cloudBackupSelect"></select>
+                <button id="cloudBackupStatusBtn">检查云库</button>
+                <button class="primary" id="cloudBackupNowBtn">备份到云数据库</button>
+                <button id="cloudRestoreLatestBtn">从云数据库恢复</button>
+              </div>
+            </div>
             <div class="backup-list" id="backupList"></div>
           </section>
         </section>

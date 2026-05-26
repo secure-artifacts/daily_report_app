@@ -38,6 +38,7 @@ jobs:
           package_dir="dist/daily-report-app-${GITHUB_REF_NAME}"
           mkdir -p "$package_dir"
           cp index.html app.js styles.css vercel.json package.json package-lock.json README.md SECURITY_PRECHECK.md run_web_app.bat "$package_dir/"
+          cp -R api "$package_dir/"
           cd dist
           zip -r "daily-report-app-${GITHUB_REF_NAME}.zip" "daily-report-app-${GITHUB_REF_NAME}"
 

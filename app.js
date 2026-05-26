@@ -31,6 +31,10 @@ let lastFileModified = 0;
 let lastCloudText = "";
 let cloudLocationLabel = "";
 let syncStatusText = "未连接云端文件夹";
+let cloudBackupStatusText = "未检查云数据库";
+let cloudBackupLastMeta = null;
+let cloudBackupBackups = [];
+let cloudBackupToken = "";
 let syncPollTimer = 0;
 let pollInProgress = false;
 let sourceDirHandles = [];
@@ -538,6 +542,111 @@ function renderSyncPanel() {
     <div><span>本地草稿</span><strong>${recordCount} 条 · ${escapeHtml(cachedAt)}</strong></div>
     <div><span>同步状态</span><strong>${connected ? `${syncPollMs / 1000} 秒刷新` : "未连接时不会进入团队总数据"}</strong></div>
   `;
+}
+function cloudBackupAvailable() {
+  return window.location.protocol !== "file:" && typeof fetch === "function";
+}
+function cloudBackupMetaText(meta) {
+  if (!meta) return "暂无云快照";
+  const createdAt = meta.created_at ? new Date(meta.created_at).toLocaleString("zh-CN") : "未知时间";
+  return `${Number(meta.record_count || 0)} 条 · ${Number(meta.member_count || 0)} 人 · ${createdAt}`;
+}
+function setCloudBackupStatus(message, meta, backups) {
+  cloudBackupStatusText = message || cloudBackupStatusText;
+  if (meta !== undefined) cloudBackupLastMeta = meta;
+  if (Array.isArray(backups)) cloudBackupBackups = backups;
+  renderCloudBackupPanel();
+}
+function selectedCloudBackupId() {
+  return $("cloudBackupSelect")?.value || "";
+}
+function renderCloudBackupPanel() {
+  const statusBox = $("cloudBackupStatusBox");
+  if (!statusBox) return;
+  const available = cloudBackupAvailable();
+  const latest = cloudBackupMetaText(cloudBackupLastMeta);
+  statusBox.innerHTML = `
+    <div><span>云库状态</span><strong>${escapeHtml(available ? cloudBackupStatusText : "本地文件打开不可用")}</strong></div>
+    <div><span>最新快照</span><strong>${escapeHtml(latest)}</strong></div>
+    <div><span>快照数量</span><strong>${cloudBackupBackups.length ? `${cloudBackupBackups.length} 个最近备份` : "暂无列表"}</strong></div>
+  `;
+  const select = $("cloudBackupSelect");
+  if (select) {
+    const previous = select.value;
+    select.innerHTML = `<option value="">最新云快照</option>` + cloudBackupBackups.map((item) => `
+      <option value="${escapeAttr(item.id)}">${escapeHtml(item.label || "云备份")} · ${escapeHtml(new Date(item.created_at).toLocaleString("zh-CN"))}</option>
+    `).join("");
+    if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+  }
+  ["cloudBackupStatusBtn", "cloudBackupNowBtn", "cloudRestoreLatestBtn", "cloudBackupSelect"].forEach((id) => {
+    const el = $(id);
+    if (el) el.disabled = !available;
+  });
+}
+async function callCloudBackup(action, payload = {}) {
+  if (!cloudBackupAvailable()) throw new Error("请通过 Vercel 或本地开发服务器打开网页，直接打开本地文件不能调用云数据库。");
+  cloudBackupToken = $("cloudBackupTokenInput")?.value.trim() || cloudBackupToken;
+  if (!cloudBackupToken) throw new Error("请先输入云备份口令。");
+  const response = await fetch("/api/cloud-backup", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Backup-Token": cloudBackupToken
+    },
+    body: JSON.stringify({ action, ...payload })
+  });
+  const text = await response.text();
+  const result = text ? JSON.parse(text) : {};
+  if (!response.ok || result.ok === false) throw new Error(result.error || `云数据库请求失败：${response.status}`);
+  return result;
+}
+async function refreshCloudBackupStatus(silent = false) {
+  if (!cloudBackupAvailable()) {
+    setCloudBackupStatus("本地文件打开不可用", cloudBackupLastMeta);
+    if (!silent) alert("请部署到 Vercel，或用本地开发服务器打开网页后再使用云数据库备份。");
+    return;
+  }
+  cloudBackupToken = $("cloudBackupTokenInput")?.value.trim() || cloudBackupToken;
+  if (!cloudBackupToken) {
+    try {
+      const response = await fetch("/api/cloud-backup", { cache: "no-store" });
+      const result = await response.json();
+      if (!result.configured) setCloudBackupStatus("未配置 DATABASE_URL", null, []);
+      else if (!result.protected) setCloudBackupStatus("未配置 CLOUD_BACKUP_TOKEN", null, []);
+      else setCloudBackupStatus("已配置，输入口令可查看", cloudBackupLastMeta);
+    } catch {
+      setCloudBackupStatus("未检测到云备份 API", cloudBackupLastMeta);
+    }
+    return;
+  }
+  setCloudBackupStatus("正在检查云数据库...");
+  const result = await callCloudBackup("list");
+  setCloudBackupStatus(result.latest ? "云数据库已连接" : "已连接，暂无备份", result.latest || null, result.backups || []);
+}
+async function backupToCloudDatabase() {
+  if (!adminUnlocked) return setView("admin");
+  const snapshot = normalize(clone(selectedReportData()));
+  const source = selectedReportLabel();
+  const label = `${source} · ${new Date().toLocaleString("zh-CN")}`;
+  setCloudBackupStatus("正在写入云数据库...");
+  const result = await callCloudBackup("backup", { label, source, data: snapshot });
+  setCloudBackupStatus(`已备份云数据库 · ${new Date().toLocaleTimeString("zh-CN")}`, result.latest || result.meta, result.backups || []);
+  showDialog("云数据库备份完成", `已把“${source}”备份到云数据库，共 ${Number(result.meta?.record_count || 0)} 条记录。`, "");
+}
+async function restoreFromCloudDatabase() {
+  if (!adminUnlocked) return setView("admin");
+  if (!confirm("确定从云数据库恢复？当前数据会先保留一个本地恢复前备份。")) return;
+  setCloudBackupStatus("正在读取云数据库...");
+  const result = await callCloudBackup("restore", { backupId: selectedCloudBackupId() });
+  createBackup("云数据库恢复前备份");
+  data = normalize(result.data);
+  currentMember = data.members[0] || currentMember;
+  persistLocal();
+  const writeResult = await persistEverywhere("admin");
+  loadForm();
+  render();
+  setCloudBackupStatus(`已从云数据库恢复 · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta, cloudBackupBackups);
+  showDialog("云数据库恢复完成", writeResult?.written ? "云备份已经恢复并同步到当前云端文件夹。" : "云备份已经恢复到当前浏览器草稿，请选择云端文件夹后再保存同步。", "");
 }
 function renderSummaryFolders() {
   const box = $("summaryFolderBox");
@@ -1551,6 +1660,7 @@ function render() {
   renderBackups();
   renderAdminSettings();
   renderSyncPanel();
+  renderCloudBackupPanel();
   renderSummaryFolders();
   renderReportSourceTabs();
   $("quotaInput").value = String(data.quota);
@@ -2102,6 +2212,18 @@ function bindEvents() {
   $("clearSourceFoldersBtn").onclick = () => clearSourceFolders();
   $("chooseSummaryFolderBtn").onclick = () => chooseSummaryFolder().catch((err) => alert(`选择汇总失败：${err.message}`));
   $("syncSummaryFolderBtn").onclick = () => syncSummaryFolder().catch((err) => alert(`汇总失败：${err.message}`));
+  $("cloudBackupStatusBtn").onclick = () => refreshCloudBackupStatus(false).catch((err) => alert(`云数据库检查失败：${err.message}`));
+  $("cloudBackupNowBtn").onclick = () => backupToCloudDatabase().catch((err) => {
+    setCloudBackupStatus(`备份失败：${err.message}`);
+    alert(`云数据库备份失败：${err.message}`);
+  });
+  $("cloudRestoreLatestBtn").onclick = () => restoreFromCloudDatabase().catch((err) => {
+    setCloudBackupStatus(`恢复失败：${err.message}`);
+    alert(`云数据库恢复失败：${err.message}`);
+  });
+  $("cloudBackupTokenInput").onkeydown = (event) => {
+    if (event.key === "Enter") refreshCloudBackupStatus(false).catch((err) => alert(`云数据库检查失败：${err.message}`));
+  };
   $("exportBtn").onclick = exportData;
   $("backupBtn").onclick = () => setView("admin");
   $("sheetBackupBtn").onclick = backupSheets;
@@ -2136,6 +2258,7 @@ loadForm();
 render();
 setView(activeView);
 restoreCloudDirectory();
+refreshCloudBackupStatus(true);
 startCloudPolling();
 window.addEventListener("focus", () => pollSharedFile(true));
 document.addEventListener("visibilitychange", () => {
