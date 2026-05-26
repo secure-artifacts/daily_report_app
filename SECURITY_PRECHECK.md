@@ -5,7 +5,7 @@
 ## 当前部署形态
 
 - Vercel 部署网页代码、团队实时云同步 API 和可选云备份 API。
-- 配置 `POSTGRES_URL` 或 `DATABASE_URL`，再配置 `TEAM_SYNC_TOKEN` 后，成员提交优先写入 Vercel Postgres。
+- 配置 `POSTGRES_URL` 或 `DATABASE_URL`，再配置 `TEAM_SYNC_TOKEN` 后，成员编辑记录会自动写入 Vercel Postgres，点击提交会立即强制同步。
 - Google Drive 本地同步文件夹仍可作为备用同步、导出和二次汇总通道。
 - 未配置云数据库且未选择共享文件夹时，提交只会留在浏览器本地草稿。
 - 配置 `CLOUD_BACKUP_TOKEN` 后，管理员可把当前数据视图额外备份到 Postgres 快照表。
@@ -69,6 +69,8 @@
 - 新增 Vercel API：`api/cloud-data.js`，成员提交后可直接写入 Vercel 云数据库。
 - `persistEverywhere()` 已改为优先写 Vercel 云库，再写 Google Drive 文件夹备份。
 - 登录后自动从 Vercel 云库拉取最新团队数据，并每 12 秒做一次轻量刷新。
+- 成员编辑项目数量、早中晚打卡、备注、收获或日记时，会延迟自动同步记录，降低只留在本地缓存的风险。
+- 提交后的提示弹窗不再要求二次点击“写入记录”。
 - 未写入 Vercel 云库和未选择共享文件夹时，提交会明确提示只保存为本地草稿。
 - 新增 Vercel API：`api/cloud-backup.js`。
 - 新增云数据库备份/恢复界面，管理员需要输入云备份口令后才能操作。

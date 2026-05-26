@@ -55,6 +55,7 @@ let pendingDialogField = "";
 let activeView = "entry";
 let saveTimer = 0;
 let draftTimer = 0;
+let recordCloudSaveTimer = 0;
 let adminUnlocked = false;
 let showAllEntryItems = false;
 let appUnlocked = false;
@@ -312,6 +313,7 @@ async function readRemoteData() {
   return null;
 }
 async function persistEverywhere(mode = "records") {
+  window.clearTimeout(recordCloudSaveTimer);
   persistLocal();
   const remoteData = await readRemoteData().catch(() => null);
   data = mergeCloudData(remoteData, data, mode);
@@ -475,6 +477,13 @@ function scheduleSave(mode = "records") {
 function scheduleDraftSave() {
   window.clearTimeout(draftTimer);
   draftTimer = window.setTimeout(() => saveFormSilently(), 220);
+}
+function scheduleRecordCloudSave() {
+  window.clearTimeout(recordCloudSaveTimer);
+  if (!appSessionPassword || !cloudDatabaseAvailable()) return;
+  recordCloudSaveTimer = window.setTimeout(() => {
+    saveCloudDatabaseData("records", true).catch(() => {});
+  }, 1200);
 }
 function setSyncStatus(message, location = cloudLocationLabel) {
   syncStatusText = message || syncStatusText;
@@ -1136,6 +1145,7 @@ function saveFormSilently() {
     updated_at: new Date().toISOString()
   });
   persistLocal();
+  scheduleRecordCloudSave();
   return { rec, autoStatus };
 }
 function pickReviewMessage(type) {
@@ -1155,9 +1165,9 @@ async function saveAndAudit() {
   } else if (!data.autoAudit) {
     showDialog("已提交", "记录已同步云端，等待管理员审核。", "");
   } else if (autoStatus === "不达标") {
-    showDialog(pickReviewMessage("fail"), "记录已提交云端。还没有达到定额，可以写一下原因或补救计划。", rec.reason ? "" : "reason");
+    showDialog(pickReviewMessage("fail"), "记录已提交云端。还没有达到定额，原因、收获和日记会在你编辑时自动保存。", "");
   } else if (autoStatus === "达标") {
-    showDialog(pickReviewMessage("pass"), "记录已提交云端。今天达标或超额了，可以写一点收获。", rec.harvest ? "" : "harvest");
+    showDialog(pickReviewMessage("pass"), "记录已提交云端。今天达标或超额了，收获和日记会在你编辑时自动保存。", "");
   } else {
     showDialog("已提交", "记录已同步云端。", "");
   }
@@ -1822,6 +1832,8 @@ function showDialog(title, message, field) {
   $("dialogMessage").textContent = message;
   $("dialogText").value = "";
   $("dialogText").classList.toggle("hidden", !field);
+  $("dialogSkip").classList.toggle("hidden", !field);
+  $("dialogSave").textContent = field ? "写入记录" : "知道了";
   $("dialog").classList.add("show");
 }
 function closeDialog() {
@@ -2281,6 +2293,7 @@ function bindEvents() {
     preview();
     renderOverview();
     persistLocal();
+    scheduleRecordCloudSave();
   };
   $("adminQuotaDate").value = currentDate;
   $("adminQuotaDate").onchange = renderMemberQuotas;
@@ -2291,8 +2304,11 @@ function bindEvents() {
     renderOverview();
     scheduleSave("admin");
   };
-  $("entryText").oninput = preview;
-  $("statusSelect").onchange = saveFormSilently;
+  $("entryText").oninput = () => {
+    preview();
+    scheduleDraftSave();
+  };
+  $("statusSelect").onchange = () => saveFormSilently();
   $("reasonText").oninput = scheduleDraftSave;
   $("harvestText").oninput = scheduleDraftSave;
   $("diaryText").oninput = scheduleDraftSave;
@@ -2385,6 +2401,10 @@ function bindEvents() {
   };
   $("dialogSkip").onclick = closeDialog;
   $("dialogSave").onclick = () => {
+    if (!pendingDialogField) {
+      closeDialog();
+      return;
+    }
     const rec = currentRecord();
     if (pendingDialogField === "reason") {
       rec.reason = $("dialogText").value.trim();
