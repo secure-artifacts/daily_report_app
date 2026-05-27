@@ -53,6 +53,10 @@
             <div class="metric"><span>换算</span><strong id="weightedTotal">0</strong></div>
             <div class="metric" id="auditCard"><span>审核</span><strong id="auditText">待审核</strong></div>
           </section>
+          <section class="panel checkin-panel">
+            <div class="panel-head"><h2>早中晚打卡</h2><span class="hint">先选备注，再点击打卡；系统自动记录时间并判断迟到</span></div>
+            <div class="checkin-grid" id="checkinInputs"></div>
+          </section>
 
           <section class="grid-2">
             <div class="panel">
@@ -89,10 +93,6 @@
                 <textarea id="diaryText" placeholder="当天过程、问题、灵感和复盘。"></textarea>
               </div>
             </div>
-          </section>
-          <section class="panel checkin-panel">
-            <div class="panel-head"><h2>早中晚打卡</h2><span class="hint">自动保存草稿</span></div>
-            <div class="checkin-grid" id="checkinInputs"></div>
           </section>
         </section>
 
@@ -282,7 +282,7 @@
               <label class="switch-light"><input id="backupCleanupToggle" type="checkbox"> 自动清理小备份，保留周/月重要备份</label>
             </div>
             <div class="message-grid">
-              <label>早中晚打卡选项<textarea id="checkinOptionsInput"></textarea></label>
+              <label>打卡备注选项<textarea id="checkinOptionsInput"></textarea></label>
               <label>达标随机文案<textarea id="passMessagesInput"></textarea></label>
               <label>不达标随机文案<textarea id="failMessagesInput"></textarea></label>
             </div>

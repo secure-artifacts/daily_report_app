@@ -10,7 +10,7 @@
   memberItems: {},
   memberQuotas: {},
   dailyQuotas: {},
-  checkinOptions: ["准时上线", "迟到"],
+  checkinOptions: ["上线", "请假", "熬夜迟到", "听交通", "聚会", "上班", "干农活", "值日"],
   timezones: [
     { name: "北京时间", offset: "+08:00" },
     { name: "罗马时间", offset: "+02:00" }
@@ -920,11 +920,26 @@ function dailyMemberQuotaValue(member, day = currentDate) {
 }
 function groupMembers(group) {
   const report = reportData();
-  return report.members.filter((member) => (report.memberGroups?.[member] || report.groups[0]) === group);
+  return reportMembers(report).filter((member) => (report.memberGroups?.[member] || report.groups[0]) === group);
+}
+function reportMembers(report = reportData()) {
+  const members = new Set(report.members || []);
+  Object.values(report.records || {}).forEach((record) => {
+    if (record?.member) members.add(record.member);
+  });
+  return Array.from(members).sort((a, b) => {
+    const ai = (report.members || []).indexOf(a);
+    const bi = (report.members || []).indexOf(b);
+    if (ai >= 0 && bi >= 0) return ai - bi;
+    if (ai >= 0) return -1;
+    if (bi >= 0) return 1;
+    return String(a).localeCompare(String(b), "zh-CN");
+  });
 }
 function membersForGroupValue(group, report = reportData()) {
-  if (!group || group === "__all__") return report.members || [];
-  return (report.members || []).filter((member) => (report.memberGroups?.[member] || report.groups?.[0]) === group);
+  const members = reportMembers(report);
+  if (!group || group === "__all__") return members;
+  return members.filter((member) => (report.memberGroups?.[member] || report.groups?.[0]) === group);
 }
 function renderGroupMemberSelectors(groupId, memberId, selectedGroup, selectedMember, includeAll = true) {
   const report = reportData();
@@ -962,7 +977,7 @@ function recordFor(day, member) {
 function aggregatePeriod(days, scope, member) {
   const report = reportData();
   const group = $("analysisGroup")?.value || report.groups[0];
-  const members = scope === "member" ? [member] : scope === "group" ? groupMembers(group) : report.members;
+  const members = scope === "member" ? [member] : scope === "group" ? groupMembers(group) : reportMembers(report);
   const itemNames = configuredItems();
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
   const daily = days.map((day) => {
@@ -1053,8 +1068,9 @@ function checkinValueText(value) {
   if (!value) return "";
   if (typeof value === "string") return value;
   const status = value.status || "";
+  const note = value.note ? `/${value.note}` : "";
   const time = value.time ? ` ${value.time}` : "";
-  return `${status}${time}`.trim();
+  return `${status}${note}${time}`.trim();
 }
 function checkinStatus(value) {
   if (!value) return "";
@@ -1067,12 +1083,33 @@ function autoCheckinStatus(periodKey, now = new Date()) {
   if (periodKey === "morning") return isBeforeLocalTime(now, 7, 30) ? "准时上线" : "迟到";
   return "准时上线";
 }
+function isAfterUSEveningCutoff(day = currentDate) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false
+  }).formatToParts(new Date()).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  const usDay = `${parts.year}-${parts.month}-${parts.day}`;
+  return usDay > day || (usDay === day && Number(parts.hour || 0) >= 23);
+}
+function checkinDisplay(value, day = currentDate) {
+  if (value) return checkinValueText(value);
+  return isAfterUSEveningCutoff(day) ? "迟到/未打卡" : "未打卡";
+}
 function setCheckin(periodKey) {
   const now = new Date();
   const rec = currentRecord();
+  const note = $(`checkinNote_${periodKey}`)?.value || "";
   rec.checkins = rec.checkins || {};
   rec.checkins[periodKey] = {
     status: autoCheckinStatus(periodKey, now),
+    note,
     time: now.toLocaleTimeString("zh-CN", { hour12: false }),
     iso: now.toISOString()
   };
@@ -1087,11 +1124,15 @@ function readCheckins() {
 function renderCheckins(seed = currentRecord().checkins || {}) {
   const box = $("checkinInputs");
   if (!box) return;
+  const options = data.checkinOptions?.length ? data.checkinOptions : defaultData.checkinOptions;
   box.innerHTML = checkinPeriods().map((period) => `
     <label class="checkin-field">
       <span>${period.label}</span>
+      <select id="checkinNote_${period.key}">
+        ${options.map((option) => `<option value="${escapeAttr(option)}" ${(seed[period.key]?.note || "") === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+      </select>
       <button type="button" class="checkin-button ${checkinStatus(seed[period.key]) === "迟到" ? "late" : ""}" data-checkin-period="${period.key}">
-        ${escapeHtml(checkinValueText(seed[period.key]) || "点击打卡")}
+        ${escapeHtml(checkinDisplay(seed[period.key], currentDate))}
       </button>
     </label>
   `).join("");
@@ -1100,7 +1141,7 @@ function renderCheckins(seed = currentRecord().checkins || {}) {
   });
 }
 function checkinSummary(checkins = {}) {
-  return checkinPeriods().map((period) => `${period.label}:${checkinValueText(checkins[period.key]) || "未填"}`).join(" ");
+  return checkinPeriods().map((period) => `${period.label}:${checkinDisplay(checkins[period.key], currentDate)}`).join(" ");
 }
 function parseEntry(text) {
   const items = {};
@@ -1588,7 +1629,7 @@ function renderOverview() {
   if ($("overviewScopeHint")) $("overviewScopeHint").textContent = `当前查看：${selectedReportLabel()}`;
   $("overviewDateInput").value = currentDate;
   const itemNames = configuredItems();
-  const rows = report.members.map((member) => {
+  const rows = reportMembers(report).map((member) => {
     const rec = report.records[`${currentDate}|${member}`];
     const quota = memberQuota(member, currentDate);
     const weighted = Number(rec?.weighted_total || 0);
@@ -1726,7 +1767,7 @@ function renderCheckinOverview() {
         <td>${escapeHtml(day)}</td>
         <td>${escapeHtml(group)}</td>
         <td>${escapeHtml(member)}</td>
-        ${checkinPeriods().map((period) => `<td>${escapeHtml(checkinValueText(rec?.checkins?.[period.key]) || "未打卡")}</td>`).join("")}
+        ${checkinPeriods().map((period) => `<td>${escapeHtml(checkinDisplay(rec?.checkins?.[period.key], day))}</td>`).join("")}
       </tr>
     `;
   }).join("") || `<tr><td colspan="6" class="hint">暂无打卡记录。</td></tr>`;
@@ -1735,8 +1776,9 @@ function renderAnalysisMemberOptions() {
   const report = reportData();
   const select = $("analysisMember");
   const current = select.value || currentMember;
-  select.innerHTML = report.members.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
-  select.value = report.members.includes(current) ? current : report.members[0] || currentMember;
+  const members = reportMembers(report);
+  select.innerHTML = members.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
+  select.value = members.includes(current) ? current : members[0] || currentMember;
   const groupSelect = $("analysisGroup");
   const currentGroup = groupSelect.value || report.groups[0];
   groupSelect.innerHTML = report.groups.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
@@ -1873,7 +1915,7 @@ function renderAnalysisPersonTabs(members, scope, member) {
 function renderPersonalTable(days, aggregate, scope, member) {
   const itemNames = configuredItems();
   const report = reportData();
-  const scopedMembers = scope === "member" ? [member] : scope === "group" ? groupMembers($("analysisGroup").value) : report.members;
+  const scopedMembers = scope === "member" ? [member] : scope === "group" ? groupMembers($("analysisGroup").value) : reportMembers(report);
   renderAnalysisPersonTabs(scopedMembers, scope, member);
   const members = scope === "member" ? [member] : [analysisTableMember || scopedMembers[0]].filter(Boolean);
   const tableAggregate = scope === "member" ? aggregate : aggregatePeriod(days, "member", members[0]);
