@@ -1120,21 +1120,23 @@ function checkinTimeText(value) {
 function setCheckin(periodKey) {
   const now = new Date();
   const rec = currentRecord();
-  const status = $(`checkinNote_${periodKey}`)?.value || "";
-  rec.checkins = rec.checkins || {};
-  if (!status) {
-    delete rec.checkins[periodKey];
-    persistLocal();
-    scheduleRecordCloudSave();
-    renderCheckins(rec.checkins);
-    renderOverview();
-    return;
-  }
-  rec.checkins[periodKey] = {
-    status,
-    time: now.toLocaleTimeString("zh-CN", { hour12: false }),
-    iso: now.toISOString()
-  };
+  const previous = sanitizeCheckins(rec.checkins || {});
+  const next = {};
+  checkinPeriods().forEach((period) => {
+    const status = $(`checkinNote_${period.key}`)?.value || "";
+    if (!status) return;
+    const oldValue = previous[period.key];
+    if (period.key !== periodKey && checkinStatus(oldValue) === status) {
+      next[period.key] = oldValue;
+      return;
+    }
+    next[period.key] = {
+      status,
+      time: now.toLocaleTimeString("zh-CN", { hour12: false }),
+      iso: now.toISOString()
+    };
+  });
+  rec.checkins = next;
   persistLocal();
   scheduleRecordCloudSave();
   renderCheckins(rec.checkins);
@@ -1151,15 +1153,15 @@ function renderCheckins(seed = currentRecord().checkins || {}) {
   box.innerHTML = checkinPeriods().map((period) => `
     <label class="checkin-field">
       <span>${period.label}</span>
-      <select id="checkinNote_${period.key}">
+      <select id="checkinNote_${period.key}" data-checkin-period="${period.key}">
         <option value="">选择打卡选项</option>
         ${options.map((option) => `<option value="${escapeAttr(option)}" ${checkinStatus(seed[period.key]) === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
       </select>
       <span class="checkin-time">${escapeHtml(checkinTimeText(seed[period.key]) || "未记录时间")}</span>
     </label>
   `).join("");
-  box.querySelectorAll("select[id^='checkinNote_']").forEach((select) => {
-    select.onchange = () => setCheckin(select.id.replace("checkinNote_", ""));
+  box.querySelectorAll("select[data-checkin-period]").forEach((select) => {
+    select.onchange = () => setCheckin(select.dataset.checkinPeriod);
   });
 }
 function checkinSummary(checkins = {}) {
