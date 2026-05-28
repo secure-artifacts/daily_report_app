@@ -21,7 +21,7 @@ const defaultData = {
   memberItems: {},
   memberQuotas: {},
   dailyQuotas: {},
-  checkinOptions: ["准时上线", "迟到"],
+  checkinOptions: ["\u4e0a\u7ebf", "\u8bf7\u5047", "\u71ac\u591c\u8fdf\u5230"],
   adminPassword: process.env.APP_PASSWORD || "999",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
@@ -38,6 +38,13 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function normalizeCheckinStatus(status) {
+  const text = String(status || "").trim();
+  if (text === "\u51c6\u65f6\u4e0a\u7ebf") return "\u4e0a\u7ebf";
+  if (text === "\u8fdf\u5230") return "\u71ac\u591c\u8fdf\u5230";
+  return text;
+}
+
 function normalize(source) {
   const loaded = source && typeof source === "object" ? source : {};
   const data = { ...clone(defaultData), ...loaded };
@@ -51,7 +58,7 @@ function normalize(source) {
   data.memberQuotas = data.memberQuotas && typeof data.memberQuotas === "object" ? data.memberQuotas : {};
   data.dailyQuotas = data.dailyQuotas && typeof data.dailyQuotas === "object" ? data.dailyQuotas : {};
   data.checkinOptions = Array.isArray(data.checkinOptions) && data.checkinOptions.length
-    ? Array.from(new Set(data.checkinOptions.map((item) => String(item).trim()).filter(Boolean)))
+    ? Array.from(new Set(data.checkinOptions.map(normalizeCheckinStatus).filter(Boolean)))
     : clone(defaultData.checkinOptions);
   data.records = data.records && typeof data.records === "object" ? data.records : {};
   data.adminPassword = String(data.adminPassword || process.env.APP_PASSWORD || "999");
@@ -84,7 +91,7 @@ function writeData(data) {
 }
 
 function passwordCandidates(data) {
-  return new Set([data.adminPassword, process.env.APP_PASSWORD, "999"].filter(Boolean).map(String));
+  return new Set([data.adminPassword, process.env.APP_PASSWORD, process.env.TEAM_SYNC_TOKEN, "999"].filter(Boolean).map(String));
 }
 
 function isAuthorized(req, data, bodyPassword = "") {
@@ -127,6 +134,14 @@ function readBody(req) {
 
 async function handleApi(req, res, pathname) {
   const data = readData();
+  if (pathname === "/api/app-auth" && req.method === "GET") {
+    return sendJson(res, 200, { ok: true, configured: Boolean(process.env.APP_PASSWORD || process.env.TEAM_SYNC_TOKEN || data.adminPassword) });
+  }
+  if (pathname === "/api/app-auth" && req.method === "POST") {
+    const body = await readBody(req);
+    if (!isAuthorized(req, data, body.password)) return sendJson(res, 401, { ok: false, error: "密码不正确" });
+    return sendJson(res, 200, { ok: true });
+  }
   if (pathname === "/api/unlock" && req.method === "POST") {
     const body = await readBody(req);
     if (!isAuthorized(req, data, body.password)) return sendJson(res, 401, { error: "密码不正确" });

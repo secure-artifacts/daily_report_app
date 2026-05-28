@@ -56,6 +56,7 @@ let activeReportSource = "current";
 let sourceDatasets = [];
 let mergedSourceDataset = null;
 let reportDataOverride = null;
+let overviewSelectedGroups = JSON.parse(localStorage.getItem("dailyReportOverviewGroups") || "[]");
 let analysisTableMember = "";
 let overviewDetailGroup = "";
 let overviewDetailMember = "";
@@ -79,6 +80,16 @@ function todayLocalKey() {
   const now = new Date();
   return dateKeyFromDate(now);
 }
+function normalizeCheckinStatus(status) {
+  const text = String(status || "").trim();
+  if (text === "准时上线") return "上线";
+  if (text === "迟到") return "熬夜迟到";
+  return text;
+}
+function normalizeCheckinOptions(options) {
+  const source = Array.isArray(options) && options.length ? options : defaultData.checkinOptions;
+  return Array.from(new Set(source.map(normalizeCheckinStatus).filter(Boolean)));
+}
 function normalize(source) {
   const loaded = source || {};
   const members = Array.isArray(loaded.members) && loaded.members.length ? loaded.members.map(String) : ["成员A"];
@@ -95,9 +106,7 @@ function normalize(source) {
   });
   const memberQuotas = { ...(loaded.memberQuotas || {}) };
   const dailyQuotas = loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {};
-  const checkinOptions = Array.isArray(loaded.checkinOptions) && loaded.checkinOptions.length
-    ? Array.from(new Set(loaded.checkinOptions.map((item) => String(item).trim()).filter(Boolean)))
-    : clone(defaultData.checkinOptions);
+  const checkinOptions = normalizeCheckinOptions(loaded.checkinOptions);
   return {
     ...clone(defaultData),
     ...loaded,
@@ -629,6 +638,31 @@ async function callCloudData(action, payload = {}, token = appSessionPassword) {
   if (!response.ok || result.ok === false) throw new Error(result.error || `Vercel 云同步失败：${response.status}`);
   return result;
 }
+async function verifyAppPassword(password) {
+  const candidate = String(password || "").trim();
+  if (!candidate) return { ok: false, error: "请输入应用密码" };
+  if (!cloudDatabaseAvailable()) {
+    return candidate === String(data.adminPassword || "999")
+      ? { ok: true, source: "local" }
+      : { ok: false, error: "密码不正确" };
+  }
+  try {
+    const response = await fetch("/api/app-auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: candidate })
+    });
+    const text = await response.text();
+    const result = text ? JSON.parse(text) : {};
+    if (response.ok && result.ok) return { ok: true, source: "vercel-env" };
+    if (response.status !== 404) return { ok: false, error: result.error || "密码不正确" };
+  } catch {
+    // Older deployments may not have the standalone auth endpoint yet; cloud data auth is the fallback.
+  }
+  const cloudResult = await pullCloudDatabaseData({ silent: true, token: candidate, beforeUnlock: true });
+  if (cloudResult.pulled || cloudResult.reason === "empty-cloud") return { ok: true, source: "cloud-data" };
+  return { ok: false, error: "密码不正确" };
+}
 async function refreshCloudDatabaseStatus(silent = false) {
   if (!cloudDatabaseAvailable()) {
     setCloudDbStatus("本地文件打开不可用");
@@ -960,7 +994,57 @@ function membersForGroupValue(group, report = reportData()) {
   if (!group || group === "__all__") return members;
   return members.filter((member) => (report.memberGroups?.[member] || report.groups?.[0]) === group);
 }
-function renderGroupMemberSelectors(groupId, memberId, selectedGroup, selectedMember, includeAll = true) {
+function overviewGroupsForReport(report = reportData()) {
+  return Array.isArray(report.groups) ? report.groups : [];
+}
+function selectedOverviewGroups(report = reportData()) {
+  const groups = overviewGroupsForReport(report);
+  const selected = Array.isArray(overviewSelectedGroups) ? overviewSelectedGroups.filter((group) => groups.includes(group)) : [];
+  return selected.length ? selected : groups;
+}
+function overviewGroupLabel(report = reportData()) {
+  const groups = overviewGroupsForReport(report);
+  const selected = selectedOverviewGroups(report);
+  if (!groups.length || selected.length === groups.length) return "全部分组";
+  if (selected.length === 1) return selected[0];
+  return `已选 ${selected.length} 个分组`;
+}
+function renderOverviewGroupPicker(report = reportData()) {
+  const picker = $("overviewGroupPicker");
+  const menu = $("overviewGroupMenu");
+  const toggle = $("overviewGroupToggle");
+  if (!picker || !menu || !toggle) return;
+  const groups = overviewGroupsForReport(report);
+  const selected = selectedOverviewGroups(report);
+  toggle.textContent = overviewGroupLabel(report);
+  const allChecked = !groups.length || selected.length === groups.length;
+  menu.innerHTML = `
+    <label><input type="checkbox" data-overview-group="__all__" ${allChecked ? "checked" : ""}> <span>全部分组</span></label>
+    ${groups.map((group) => `
+      <label><input type="checkbox" data-overview-group="${escapeAttr(group)}" ${selected.includes(group) ? "checked" : ""}> <span>${escapeHtml(group)}</span></label>
+    `).join("")}
+  `;
+  toggle.onclick = (event) => {
+    event.stopPropagation();
+    picker.classList.toggle("open");
+  };
+  menu.onclick = (event) => event.stopPropagation();
+  menu.querySelectorAll("input[data-overview-group]").forEach((input) => {
+    input.onchange = () => {
+      if (input.dataset.overviewGroup === "__all__") {
+        overviewSelectedGroups = input.checked ? [] : [];
+      } else {
+        const checked = Array.from(menu.querySelectorAll("input[data-overview-group]:checked"))
+          .map((item) => item.dataset.overviewGroup)
+          .filter((group) => group && group !== "__all__");
+        overviewSelectedGroups = checked.length === groups.length ? [] : checked;
+      }
+      localStorage.setItem("dailyReportOverviewGroups", JSON.stringify(overviewSelectedGroups));
+      renderOverview();
+    };
+  });
+}
+function renderGroupMemberSelectors(groupId, memberId, selectedGroup, selectedMember, includeAll = true, includeAllMembers = true) {
   const report = reportData();
   const groupSelect = $(groupId);
   const memberSelect = $(memberId);
@@ -969,9 +1053,10 @@ function renderGroupMemberSelectors(groupId, memberId, selectedGroup, selectedMe
   groupSelect.innerHTML = `${includeAll ? `<option value="__all__">全部分组</option>` : ""}${report.groups.map((group) => `<option value="${escapeAttr(group)}">${escapeHtml(group)}</option>`).join("")}`;
   groupSelect.value = [...groupSelect.options].some((option) => option.value === currentGroup) ? currentGroup : (includeAll ? "__all__" : report.groups[0] || "");
   const members = membersForGroupValue(groupSelect.value, report);
-  const currentMemberValue = selectedMember || memberSelect.value || members[0] || "";
-  memberSelect.innerHTML = members.map((member) => `<option value="${escapeAttr(member)}">${escapeHtml(member)}</option>`).join("");
-  memberSelect.value = members.includes(currentMemberValue) ? currentMemberValue : members[0] || "";
+  const currentMemberValue = selectedMember ?? memberSelect.value ?? "";
+  const allLabel = groupSelect.value && groupSelect.value !== "__all__" ? `${groupSelect.value} 全部成员` : "全部成员";
+  memberSelect.innerHTML = `${includeAllMembers ? `<option value="">${escapeHtml(allLabel)}</option>` : ""}${members.map((member) => `<option value="${escapeAttr(member)}">${escapeHtml(member)}</option>`).join("")}`;
+  memberSelect.value = members.includes(currentMemberValue) ? currentMemberValue : (includeAllMembers ? "" : members[0] || "");
   return { group: groupSelect.value, member: memberSelect.value };
 }
 function dateFromKey(key) {
@@ -987,16 +1072,87 @@ function addDays(key, offset) {
   date.setDate(date.getDate() + offset);
   return dateKeyFromDate(date);
 }
+function monthKeyFromDateKey(key) {
+  return String(key || todayLocalKey()).slice(0, 7);
+}
+function daysInMonth(monthKey) {
+  const [year, month] = String(monthKey || monthKeyFromDateKey(currentDate)).split("-").map(Number);
+  return new Date(year, month, 0).getDate();
+}
+function sameDayInMonth(monthKey, dayKey = currentDate) {
+  const day = Math.min(Number(String(dayKey).slice(8, 10)) || 1, daysInMonth(monthKey));
+  return `${monthKey}-${String(day).padStart(2, "0")}`;
+}
+function shiftMonth(dayKey, offset) {
+  const date = dateFromKey(dayKey);
+  date.setMonth(date.getMonth() + offset, 1);
+  const monthKey = dateKeyFromDate(date).slice(0, 7);
+  return sameDayInMonth(monthKey, dayKey);
+}
+function weekStartKey(dayKey) {
+  const date = dateFromKey(dayKey);
+  const weekday = date.getDay() || 7;
+  date.setDate(date.getDate() - weekday + 1);
+  return dateKeyFromDate(date);
+}
+function selectDate(nextDate, shouldSave = true) {
+  if (!nextDate) return;
+  if (shouldSave) saveFormSilently();
+  currentDate = nextDate;
+  if ($("dateInput")) $("dateInput").value = currentDate;
+  if ($("overviewDateInput")) $("overviewDateInput").value = currentDate;
+  loadForm();
+  render();
+}
+function renderWeekStrip(containerId) {
+  const box = $(containerId);
+  if (!box) return;
+  const start = weekStartKey(currentDate);
+  const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
+  box.innerHTML = weekdays.map((weekday, index) => {
+    const day = addDays(start, index);
+    const active = day === currentDate;
+    const outMonth = day.slice(0, 7) !== currentDate.slice(0, 7);
+    return `
+      <button class="day-cell ${active ? "active" : ""} ${outMonth ? "out-month" : ""}" type="button" data-calendar-day="${day}" title="${day}">
+        <span>周${weekday}</span>
+        <strong>${Number(day.slice(8, 10))}</strong>
+      </button>
+    `;
+  }).join("");
+  box.querySelectorAll("[data-calendar-day]").forEach((button) => {
+    button.onclick = () => selectDate(button.dataset.calendarDay);
+  });
+}
+function renderDateCalendars() {
+  const monthKey = monthKeyFromDateKey(currentDate);
+  if ($("dateDisplay")) $("dateDisplay").textContent = currentDate;
+  if ($("dateInput")) $("dateInput").value = currentDate;
+  if ($("overviewDateInput")) $("overviewDateInput").value = currentDate;
+  if ($("monthInput")) $("monthInput").value = monthKey;
+  if ($("overviewMonthInput")) $("overviewMonthInput").value = monthKey;
+  renderWeekStrip("dateWeekStrip");
+  renderWeekStrip("overviewWeekStrip");
+}
 function periodKeys(endKey, days) {
   return Array.from({ length: days }, (_, index) => addDays(endKey, index - days + 1));
 }
 function recordFor(day, member) {
   return reportData().records[`${day}|${member}`] || null;
 }
+function analysisGroupValue(report = reportData()) {
+  const group = $("analysisGroup")?.value || report.groups?.[0] || "";
+  return report.groups?.includes(group) ? group : report.groups?.[0] || "";
+}
+function analysisMembersForScope(scope, member, report = reportData()) {
+  if (scope === "team") return reportMembers(report);
+  const group = analysisGroupValue(report);
+  if (scope === "group") return membersForGroupValue(group, report);
+  return member ? [member] : membersForGroupValue(group, report);
+}
 function aggregatePeriod(days, scope, member) {
   const report = reportData();
-  const group = $("analysisGroup")?.value || report.groups[0];
-  const members = scope === "member" ? [member] : scope === "group" ? groupMembers(group) : reportMembers(report);
+  const members = analysisMembersForScope(scope, member, report);
   const itemNames = configuredItems();
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
   const daily = days.map((day) => {
@@ -1084,58 +1240,53 @@ function checkinPeriods() {
     { key: "evening", label: "晚" }
   ];
 }
-function isLegacyAutoCheckin(value) {
-  const status = checkinStatus(value);
-  return status === "准时上线" || status === "迟到";
-}
 function sanitizeCheckins(checkins = {}) {
   const cleaned = {};
+  const allowed = new Set(checkinPeriods().map((period) => period.key));
   Object.entries(checkins || {}).forEach(([key, value]) => {
-    if (!value || isLegacyAutoCheckin(value)) return;
-    cleaned[key] = value;
+    if (!allowed.has(key) || !value) return;
+    const status = normalizeCheckinStatus(checkinStatus(value));
+    if (!status) return;
+    cleaned[key] = typeof value === "object"
+      ? { ...value, status }
+      : { status };
   });
   return cleaned;
 }
 function checkinValueText(value) {
   if (!value) return "";
-  if (isLegacyAutoCheckin(value)) return "";
-  if (typeof value === "string") return value;
-  const status = value.status || "";
+  if (typeof value === "string") return normalizeCheckinStatus(value);
+  const status = normalizeCheckinStatus(value.status || "");
   const note = value.note ? `/${value.note}` : "";
   const time = value.time ? ` ${value.time}` : "";
   return `${status}${note}${time}`.trim();
 }
 function checkinStatus(value) {
   if (!value) return "";
-  return typeof value === "string" ? value : String(value.status || "");
+  return normalizeCheckinStatus(typeof value === "string" ? value : String(value.status || ""));
 }
 function checkinDisplay(value) {
   if (value) return checkinValueText(value);
   return "未打卡";
 }
 function checkinTimeText(value) {
-  if (!value || typeof value === "string" || isLegacyAutoCheckin(value)) return "";
+  if (!value || typeof value === "string") return "";
   return value.time ? `记录时间 ${value.time}` : "";
 }
 function setCheckin(periodKey) {
   const now = new Date();
   const rec = currentRecord();
-  const previous = sanitizeCheckins(rec.checkins || {});
-  const next = {};
-  checkinPeriods().forEach((period) => {
-    const status = $(`checkinNote_${period.key}`)?.value || "";
-    if (!status) return;
-    const oldValue = previous[period.key];
-    if (period.key !== periodKey && checkinStatus(oldValue) === status) {
-      next[period.key] = oldValue;
-      return;
-    }
-    next[period.key] = {
+  const next = sanitizeCheckins(rec.checkins || {});
+  const status = normalizeCheckinStatus($(`checkinNote_${periodKey}`)?.value || "");
+  if (!status) {
+    delete next[periodKey];
+  } else {
+    next[periodKey] = {
       status,
       time: now.toLocaleTimeString("zh-CN", { hour12: false }),
       iso: now.toISOString()
     };
-  });
+  }
   rec.checkins = next;
   persistLocal();
   scheduleRecordCloudSave();
@@ -1149,7 +1300,8 @@ function renderCheckins(seed = currentRecord().checkins || {}) {
   const box = $("checkinInputs");
   if (!box) return;
   seed = sanitizeCheckins(seed);
-  const options = data.checkinOptions?.length ? data.checkinOptions : defaultData.checkinOptions;
+  const savedStatuses = Object.values(seed).map(checkinStatus).filter(Boolean);
+  const options = normalizeCheckinOptions([...(data.checkinOptions || defaultData.checkinOptions), ...savedStatuses]);
   box.innerHTML = checkinPeriods().map((period) => `
     <label class="checkin-field">
       <span>${period.label}</span>
@@ -1652,10 +1804,14 @@ function renderOverview() {
   if (!reportDataOverride) return withReportData(selectedReportData(), renderOverview);
   const report = reportData();
   renderReportSourceTabs();
-  if ($("overviewScopeHint")) $("overviewScopeHint").textContent = `当前查看：${selectedReportLabel()}`;
+  renderOverviewGroupPicker(report);
+  if ($("overviewScopeHint")) $("overviewScopeHint").textContent = `当前查看：${selectedReportLabel()} · ${overviewGroupLabel(report)}`;
   $("overviewDateInput").value = currentDate;
   const itemNames = configuredItems();
-  const rows = reportMembers(report).map((member) => {
+  const selectedGroups = selectedOverviewGroups(report);
+  const selectedGroupSet = new Set(selectedGroups);
+  const visibleGroups = report.groups.filter((group) => selectedGroupSet.has(group));
+  const allRows = reportMembers(report).map((member) => {
     const rec = report.records[`${currentDate}|${member}`];
     const quota = memberQuota(member, currentDate);
     const weighted = Number(rec?.weighted_total || 0);
@@ -1665,6 +1821,7 @@ function renderOverview() {
     const items = rec?.items || {};
     return { member, rec, quota, weighted, passed, rate, items, checkins: rec?.checkins || {} };
   });
+  const rows = allRows.filter((row) => selectedGroupSet.has(report.memberGroups?.[row.member] || report.groups[0]));
   const pass = rows.filter((row) => row.passed).length;
   const fail = rows.length - pass;
   const totalWeighted = rows.reduce((sum, row) => sum + row.weighted, 0);
@@ -1674,14 +1831,14 @@ function renderOverview() {
     totals[name] = rows.reduce((sum, row) => sum + Number(row.items[name] || 0), 0);
     return totals;
   }, {});
-  $("overviewTitle").textContent = `${currentDate} 达标情况`;
+  $("overviewTitle").textContent = `${currentDate} ${overviewGroupLabel(report)}达标情况`;
   $("passCount").textContent = String(pass);
   $("failCount").textContent = String(fail);
   $("passRate").textContent = rows.length ? `${Math.round(pass / rows.length * 100)}%` : "0%";
   $("teamTotal").textContent = fmt(totalWeighted);
   $("teamQuota").textContent = `${fmt(totalQuota)} ${teamPassed ? "✓" : ""}`;
   $("teamDiff").textContent = `${totalWeighted - totalQuota >= 0 ? "+" : ""}${fmt(totalWeighted - totalQuota)}`;
-  $("overviewHint").textContent = `${rows.length} 位成员 · 小组${teamPassed ? "已完成" : "未完成"}总定额`;
+  $("overviewHint").textContent = `${overviewGroupLabel(report)} · ${rows.length} 位成员 · ${teamPassed ? "已完成" : "未完成"}总定额`;
   const rowCard = (row) => `
     <article class="person-card ${row.passed ? "pass" : "fail"}" data-overview-member="${escapeAttr(row.member)}" title="点击查看个人今日">
       <div class="person-top">
@@ -1695,7 +1852,7 @@ function renderOverview() {
       <div class="hint">${escapeHtml(row.rec?.reason || row.rec?.harvest || "暂无备注")}</div>
     </article>
   `;
-  $("overviewGrid").innerHTML = report.groups.map((group) => {
+  $("overviewGrid").innerHTML = visibleGroups.map((group) => {
     const groupRows = rows.filter((row) => (report.memberGroups?.[row.member] || report.groups[0]) === group);
     const groupWeighted = groupRows.reduce((sum, row) => sum + row.weighted, 0);
     const groupQuota = groupRows.reduce((sum, row) => sum + row.quota, 0);
@@ -1723,8 +1880,18 @@ function renderOverview() {
   const detailPick = renderGroupMemberSelectors("overviewDetailGroup", "overviewDetailMember", overviewDetailGroup, overviewDetailMember);
   overviewDetailGroup = detailPick.group;
   overviewDetailMember = detailPick.member;
-  const detailRow = rows.find((row) => row.member === overviewDetailMember) || rows[0];
-  $("detailHint").textContent = `团队：${itemNames.map((name) => `${name} ${fmt(itemTotals[name])}`).join(" · ")}${detailRow ? ` ｜ 当前个人：${detailRow.member}` : ""}`;
+  const detailMembers = overviewDetailMember ? [overviewDetailMember] : membersForGroupValue(overviewDetailGroup, report);
+  const detailSourceRows = allRows.filter((row) => detailMembers.includes(row.member));
+  const detailTotals = itemNames.reduce((totals, name) => {
+    totals[name] = detailSourceRows.reduce((sum, row) => sum + Number(row.items[name] || 0), 0);
+    return totals;
+  }, {});
+  const detailRaw = detailSourceRows.reduce((sum, row) => sum + Number(row.rec?.raw_total || 0), 0);
+  const detailWeighted = detailSourceRows.reduce((sum, row) => sum + row.weighted, 0);
+  const detailQuota = detailSourceRows.reduce((sum, row) => sum + row.quota, 0);
+  const detailPassed = detailWeighted >= detailQuota;
+  const detailLabel = overviewDetailMember || (overviewDetailGroup === "__all__" ? "全部成员合计" : `${overviewDetailGroup}全部成员`);
+  $("detailHint").textContent = `${detailLabel}：${itemNames.map((name) => `${name} ${fmt(detailTotals[name])}`).join(" · ")}`;
   $("detailHead").innerHTML = `
     <tr>
       <th>成员</th>
@@ -1739,8 +1906,9 @@ function renderOverview() {
     </tr>
   `;
   const detailRows = [
-    { label: "总队数据", items: itemTotals, raw: rows.reduce((sum, row) => sum + Number(row.rec?.raw_total || 0), 0), weighted: totalWeighted, quota: totalQuota, diff: totalWeighted - totalQuota, status: teamPassed ? "完成" : "未完成", checkins: "", note: "" },
-    detailRow ? { label: detailRow.member, items: detailRow.items, raw: Number(detailRow.rec?.raw_total || 0), weighted: detailRow.weighted, quota: detailRow.quota, diff: detailRow.weighted - detailRow.quota, status: detailRow.passed ? "达标" : "未达", checkins: checkinSummary(detailRow.checkins), note: detailRow.rec?.reason || detailRow.rec?.harvest || "" } : null
+    { label: `${overviewGroupLabel(report)}合计`, items: itemTotals, raw: rows.reduce((sum, row) => sum + Number(row.rec?.raw_total || 0), 0), weighted: totalWeighted, quota: totalQuota, diff: totalWeighted - totalQuota, status: teamPassed ? "完成" : "未完成", checkins: "", note: "" },
+    { label: detailLabel, items: detailTotals, raw: detailRaw, weighted: detailWeighted, quota: detailQuota, diff: detailWeighted - detailQuota, status: detailPassed ? "完成" : "未完成", checkins: "", note: "" },
+    ...detailSourceRows.map((row) => ({ label: row.member, items: row.items, raw: Number(row.rec?.raw_total || 0), weighted: row.weighted, quota: row.quota, diff: row.weighted - row.quota, status: row.passed ? "达标" : "未达", checkins: checkinSummary(row.checkins), note: row.rec?.reason || row.rec?.harvest || "" }))
   ].filter(Boolean);
   $("detailBody").innerHTML = detailRows.map((row) => `
     <tr>
@@ -1801,24 +1969,27 @@ function renderCheckinOverview() {
 function renderAnalysisMemberOptions() {
   const report = reportData();
   const select = $("analysisMember");
-  const current = select.value || currentMember;
-  const members = reportMembers(report);
-  select.innerHTML = members.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
-  select.value = members.includes(current) ? current : members[0] || currentMember;
+  const scope = $("analysisScope")?.value || "team";
   const groupSelect = $("analysisGroup");
-  const currentGroup = groupSelect.value || report.groups[0];
+  const currentGroup = groupSelect.value || report.groups[0] || "";
   groupSelect.innerHTML = report.groups.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
-  groupSelect.value = report.groups.includes(currentGroup) ? currentGroup : report.groups[0];
+  groupSelect.value = report.groups.includes(currentGroup) ? currentGroup : report.groups[0] || "";
+  const members = scope === "member" ? membersForGroupValue(groupSelect.value, report) : reportMembers(report);
+  const current = select.value;
+  const allLabel = groupSelect.value ? `${groupSelect.value} 全部成员` : "全部成员";
+  select.innerHTML = `<option value="">${escapeHtml(allLabel)}</option>${members.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("")}`;
+  select.value = current === "" || members.includes(current) ? current : "";
 }
 function renderAnalytics() {
   if (!reportDataOverride) return withReportData(selectedReportData(), renderAnalytics);
   renderAnalysisMemberOptions();
+  const report = reportData();
   const scope = $("analysisScope").value || "team";
-  const member = $("analysisMember").value || currentMember;
+  const member = $("analysisMember").value || "";
   const range = Math.max(1, Math.min(62, Number($("analysisCustomDays").value || $("analysisRange").value || 7)));
   const compareMode = $("analysisCompare").value || "previous";
-  $("analysisMember").disabled = scope !== "member";
-  $("analysisGroup").disabled = scope !== "group";
+  $("analysisMember").disabled = false;
+  $("analysisGroup").disabled = false;
   const days = periodKeys(currentDate, range);
   const startInput = $("rangeStart");
   const endInput = $("rangeEnd");
@@ -1836,7 +2007,8 @@ function renderAnalytics() {
   const weightedDelta = current.weighted - previous.weighted;
   const diffDelta = current.diff - previous.diff;
   const rate = current.quota > 0 ? Math.round(current.weighted / current.quota * 100) : 100;
-  const label = scope === "member" ? member : scope === "group" ? $("analysisGroup").value : "团队";
+  const group = analysisGroupValue(report);
+  const label = scope === "member" ? (member || `${group}全部成员`) : scope === "group" ? group : "团队";
   const yesterday = aggregatePeriod([addDays(currentDate, -1)], scope, member);
   const today = aggregatePeriod([currentDate], scope, member);
   const todayDelta = today.weighted - yesterday.weighted;
@@ -1923,7 +2095,7 @@ function renderAnalysisPersonTabs(members, scope, member) {
   const box = $("analysisPersonTabs");
   if (!box) return;
   if (scope === "member" || members.length <= 1) {
-    analysisTableMember = member;
+    analysisTableMember = member || "";
     box.innerHTML = "";
     return;
   }
@@ -1941,9 +2113,9 @@ function renderAnalysisPersonTabs(members, scope, member) {
 function renderPersonalTable(days, aggregate, scope, member) {
   const itemNames = configuredItems();
   const report = reportData();
-  const scopedMembers = scope === "member" ? [member] : scope === "group" ? groupMembers($("analysisGroup").value) : reportMembers(report);
+  const scopedMembers = analysisMembersForScope(scope, member, report);
   renderAnalysisPersonTabs(scopedMembers, scope, member);
-  const members = scope === "member" ? [member] : [analysisTableMember || scopedMembers[0]].filter(Boolean);
+  const members = scope === "member" ? scopedMembers : [analysisTableMember || scopedMembers[0]].filter(Boolean);
   const tableAggregate = scope === "member" ? aggregate : aggregatePeriod(days, "member", members[0]);
   $("personalHead").innerHTML = `
     <tr>
@@ -1977,7 +2149,7 @@ function renderPersonalTable(days, aggregate, scope, member) {
   rows.push(`
     <tr>
       <th>合计</th>
-      <th>${scope === "member" ? escapeHtml(member) : escapeHtml(analysisTableMember || "团队")}</th>
+      <th>${scope === "member" ? escapeHtml(member || `${analysisGroupValue(report)}全部成员`) : escapeHtml(analysisTableMember || "团队")}</th>
       ${itemNames.map((name) => `<th>${fmt(tableAggregate.itemTotals[name] || 0)}</th>`).join("")}
       <th>${fmt(tableAggregate.weighted)}</th>
       <th>${fmt(tableAggregate.quota)}</th>
@@ -2050,7 +2222,7 @@ function collectAdminSettings() {
   data.autoAudit = false;
   data.sheetBackupEnabled = $("sheetBackupToggle").checked;
   data.backupCleanupEnabled = $("backupCleanupToggle").checked;
-  data.checkinOptions = $("checkinOptionsInput").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 20);
+  data.checkinOptions = normalizeCheckinOptions($("checkinOptionsInput").value.split(/\r?\n/)).slice(0, 20);
   if (!data.checkinOptions.length) data.checkinOptions = clone(defaultData.checkinOptions);
   data.reviewMessages = {
     pass: $("passMessagesInput").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 30),
@@ -2060,6 +2232,7 @@ function collectAdminSettings() {
   if (!data.reviewMessages.fail.length) data.reviewMessages.fail = clone(defaultData.reviewMessages.fail);
 }
 function render() {
+  renderDateCalendars();
   renderMembers();
   renderRules();
   renderMemberQuotas();
@@ -2108,16 +2281,11 @@ function closeDialog() {
   $("dialog").classList.remove("show");
 }
 async function unlockApp() {
-  const password = $("appPasswordInput").value;
-  const localPasswordOk = password === String(data.adminPassword || "999");
-  let cloudPasswordOk = false;
-  if (!localPasswordOk) {
-    $("lockHint").textContent = "正在检查 Vercel 云库...";
-    const cloudResult = await pullCloudDatabaseData({ silent: true, token: password, beforeUnlock: true });
-    cloudPasswordOk = cloudResult.pulled || cloudResult.reason === "empty-cloud";
-  }
-  if (!localPasswordOk && !cloudPasswordOk) {
-    $("lockHint").textContent = "密码不正确";
+  const password = $("appPasswordInput").value.trim();
+  $("lockHint").textContent = "正在验证应用密码...";
+  const auth = await verifyAppPassword(password);
+  if (!auth.ok) {
+    $("lockHint").textContent = auth.error || "密码不正确";
     $("appPasswordInput").select();
     return;
   }
@@ -2532,19 +2700,17 @@ function escapeAttr(value) {
 }
 function bindEvents() {
   $("dateInput").value = currentDate;
-  $("dateInput").onchange = () => {
-    saveFormSilently();
-    currentDate = $("dateInput").value;
-    loadForm();
-    render();
-  };
+  $("dateInput").onchange = () => selectDate($("dateInput").value);
   $("overviewDateInput").onchange = () => {
-    saveFormSilently();
-    currentDate = $("overviewDateInput").value || todayLocalKey();
-    $("dateInput").value = currentDate;
-    loadForm();
-    render();
+    selectDate($("overviewDateInput").value || todayLocalKey());
   };
+  ["monthInput", "overviewMonthInput"].forEach((id) => {
+    $(id).onchange = () => selectDate(sameDayInMonth($(id).value || monthKeyFromDateKey(currentDate)));
+  });
+  $("prevMonthBtn").onclick = () => selectDate(shiftMonth(currentDate, -1));
+  $("nextMonthBtn").onclick = () => selectDate(shiftMonth(currentDate, 1));
+  $("overviewPrevMonthBtn").onclick = () => selectDate(shiftMonth(currentDate, -1));
+  $("overviewNextMonthBtn").onclick = () => selectDate(shiftMonth(currentDate, 1));
   $("unlockBtn").onclick = () => unlockApp().catch((err) => {
     $("lockHint").textContent = err.message || "登录失败";
   });
@@ -2591,7 +2757,29 @@ function bindEvents() {
   $("checkinOptionsInput").onchange = () => { collectAdminSettings(); renderCheckins(currentRecord().checkins || {}); renderOverview(); scheduleSave("admin"); };
   $("passMessagesInput").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
   $("failMessagesInput").onchange = () => { collectAdminSettings(); scheduleSave("admin"); };
-  ["analysisScope", "analysisGroup", "analysisMember", "analysisRange", "analysisCustomDays", "analysisCompare", "rangeStart", "rangeEnd"].forEach((id) => {
+  $("analysisScope").onchange = () => {
+    analysisTableMember = "";
+    renderAnalytics();
+  };
+  $("analysisGroup").onchange = () => {
+    if ($("analysisScope").value === "team") $("analysisScope").value = "group";
+    analysisTableMember = "";
+    renderAnalytics();
+  };
+  $("analysisMember").onchange = () => {
+    const member = $("analysisMember").value;
+    if (member) {
+      const report = selectedReportData();
+      const group = report.memberGroups?.[member];
+      if (group && [...$("analysisGroup").options].some((option) => option.value === group)) $("analysisGroup").value = group;
+      $("analysisScope").value = "member";
+    } else if ($("analysisScope").value === "member") {
+      $("analysisScope").value = "group";
+    }
+    analysisTableMember = "";
+    renderAnalytics();
+  };
+  ["analysisRange", "analysisCustomDays", "analysisCompare", "rangeStart", "rangeEnd"].forEach((id) => {
     $(id).onchange = renderAnalytics;
   });
   ["overviewDetailGroup", "overviewDetailMember"].forEach((id) => {
@@ -2717,6 +2905,10 @@ function bindEvents() {
   };
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => setView(tab.dataset.view || "entry"));
+  });
+  document.addEventListener("click", (event) => {
+    const picker = $("overviewGroupPicker");
+    if (picker && !picker.contains(event.target)) picker.classList.remove("open");
   });
 }
 pruneBackups();

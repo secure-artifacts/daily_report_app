@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "node --check app.js && node --check api/cloud-backup.js && node --check api/cloud-data.js"
+    "check": "node --check app.js && node --check api/app-auth.js && node --check api/cloud-backup.js && node --check api/cloud-data.js"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0"

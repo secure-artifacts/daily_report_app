@@ -16,7 +16,7 @@ const defaultData = {
   memberItems: {},
   memberQuotas: {},
   dailyQuotas: {},
-  checkinOptions: ["准时上线", "迟到"],
+  checkinOptions: ["\u4e0a\u7ebf", "\u8bf7\u5047", "\u71ac\u591c\u8fdf\u5230"],
   adminPassword: "999",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
@@ -30,6 +30,18 @@ const defaultData = {
 };
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
+
+function normalizeCheckinStatus(status) {
+  const text = String(status || "").trim();
+  if (text === "\u51c6\u65f6\u4e0a\u7ebf") return "\u4e0a\u7ebf";
+  if (text === "\u8fdf\u5230") return "\u71ac\u591c\u8fdf\u5230";
+  return text;
+}
+
+function normalizeCheckinOptions(options) {
+  const source = Array.isArray(options) && options.length ? options : defaultData.checkinOptions;
+  return Array.from(new Set(source.map(normalizeCheckinStatus).filter(Boolean)));
+}
 
 function send(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -92,9 +104,7 @@ function normalize(source) {
   groups.forEach((group) => {
     if (!Array.isArray(groupItems[group])) groupItems[group] = Object.keys(rules);
   });
-  const checkinOptions = Array.isArray(loaded.checkinOptions) && loaded.checkinOptions.length
-    ? Array.from(new Set(loaded.checkinOptions.map((item) => String(item).trim()).filter(Boolean)))
-    : clone(defaultData.checkinOptions);
+  const checkinOptions = normalizeCheckinOptions(loaded.checkinOptions);
   return {
     ...clone(defaultData),
     ...loaded,
