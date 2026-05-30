@@ -186,10 +186,13 @@ function persistLocal() {
   pruneBackups();
   renderSyncPanel();
 }
-function newerRecord(a, b) {
+function newerRecord(a, b, prefer = "first") {
   if (!a) return b;
   if (!b) return a;
-  return String(a.updated_at || "") >= String(b.updated_at || "") ? a : b;
+  const left = String(a.updated_at || "");
+  const right = String(b.updated_at || "");
+  if (left === right) return prefer === "second" ? b : a;
+  return left > right ? a : b;
 }
 function mergeDailyQuotas(remoteDaily = {}, localDaily = {}, mode = "records") {
   const merged = {};
@@ -214,7 +217,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
   const merged = mode === "admin" ? { ...remote, ...local } : { ...local, ...remote };
   merged.records = { ...remote.records, ...local.records };
   Object.keys(merged.records).forEach((key) => {
-    merged.records[key] = newerRecord(remote.records[key], local.records[key]);
+    merged.records[key] = newerRecord(remote.records[key], local.records[key], "second");
   });
   if (mode === "admin") {
     merged.rules = clone(local.rules);
@@ -1274,6 +1277,7 @@ function checkinTimeText(value) {
   return value.time ? `记录时间 ${value.time}` : "";
 }
 function setCheckin(periodKey) {
+  saveFormSilently();
   const now = new Date();
   const updatedAt = now.toISOString();
   const rec = currentRecord();
@@ -1954,23 +1958,35 @@ function renderCheckinOverview() {
   const pick = renderGroupMemberSelectors("checkinViewGroup", "checkinViewMember", checkinViewGroup, checkinViewMember);
   checkinViewGroup = pick.group;
   checkinViewMember = pick.member;
-  if (!$("checkinViewDate").value) $("checkinViewDate").value = currentDate;
-  const day = $("checkinViewDate").value || currentDate;
+  if (!$("checkinViewStart").value) $("checkinViewStart").value = `${currentDate.slice(0, 7)}-01`;
+  if (!$("checkinViewEnd").value) $("checkinViewEnd").value = currentDate;
+  let start = $("checkinViewStart").value || currentDate;
+  let end = $("checkinViewEnd").value || currentDate;
+  if (start > end) {
+    [start, end] = [end, start];
+    $("checkinViewStart").value = start;
+    $("checkinViewEnd").value = end;
+  }
+  const days = buildDateRange(start, end);
   const members = checkinViewMember ? [checkinViewMember] : membersForGroupValue(checkinViewGroup, report);
-  $("checkinOverviewHint").textContent = `${day} · ${members.length || 0} 人`;
+  $("checkinOverviewHint").textContent = `${start} 至 ${end} · ${members.length || 0} 人 · ${days.length} 天`;
   $("checkinHead").innerHTML = `<tr><th>日期</th><th>分组</th><th>成员</th>${checkinPeriods().map((period) => `<th>${period.label}</th>`).join("")}</tr>`;
-  $("checkinBody").innerHTML = members.map((member) => {
-    const rec = report.records?.[`${day}|${member}`];
-    const group = report.memberGroups?.[member] || report.groups?.[0] || "";
-    return `
-      <tr>
-        <td>${escapeHtml(day)}</td>
-        <td>${escapeHtml(group)}</td>
-        <td>${escapeHtml(member)}</td>
-        ${checkinPeriods().map((period) => `<td>${escapeHtml(checkinDisplay(rec?.checkins?.[period.key]))}</td>`).join("")}
-      </tr>
-    `;
-  }).join("") || `<tr><td colspan="6" class="hint">暂无打卡记录。</td></tr>`;
+  const rows = [];
+  days.forEach((day) => {
+    members.forEach((member) => {
+      const rec = report.records?.[`${day}|${member}`];
+      const group = report.memberGroups?.[member] || report.groups?.[0] || "";
+      rows.push(`
+        <tr>
+          <td>${escapeHtml(day)}</td>
+          <td>${escapeHtml(group)}</td>
+          <td>${escapeHtml(member)}</td>
+          ${checkinPeriods().map((period) => `<td>${escapeHtml(checkinDisplay(rec?.checkins?.[period.key]))}</td>`).join("")}
+        </tr>
+      `);
+    });
+  });
+  $("checkinBody").innerHTML = rows.join("") || `<tr><td colspan="6" class="hint">暂无打卡记录。</td></tr>`;
 }
 function renderAnalysisMemberOptions() {
   const report = reportData();
@@ -2795,7 +2811,7 @@ function bindEvents() {
       renderOverview();
     };
   });
-  ["checkinViewGroup", "checkinViewMember", "checkinViewDate"].forEach((id) => {
+  ["checkinViewGroup", "checkinViewMember", "checkinViewStart", "checkinViewEnd"].forEach((id) => {
     $(id).onchange = () => {
       checkinViewGroup = $("checkinViewGroup").value;
       checkinViewMember = $("checkinViewMember").value;

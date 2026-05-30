@@ -132,10 +132,13 @@ function normalize(source) {
   };
 }
 
-function newerRecord(a, b) {
+function newerRecord(a, b, prefer = "first") {
   if (!a) return b;
   if (!b) return a;
-  return String(a.updated_at || "") >= String(b.updated_at || "") ? a : b;
+  const left = String(a.updated_at || "");
+  const right = String(b.updated_at || "");
+  if (left === right) return prefer === "second" ? b : a;
+  return left > right ? a : b;
 }
 
 function mergeDailyQuotas(remoteDaily = {}, localDaily = {}, mode = "records") {
@@ -162,7 +165,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
   const merged = mode === "admin" ? { ...remote, ...local } : { ...local, ...remote };
   merged.records = { ...remote.records, ...local.records };
   Object.keys(merged.records).forEach((key) => {
-    merged.records[key] = newerRecord(remote.records[key], local.records[key]);
+    merged.records[key] = newerRecord(remote.records[key], local.records[key], "second");
   });
   if (mode === "admin") {
     merged.rules = clone(local.rules);
