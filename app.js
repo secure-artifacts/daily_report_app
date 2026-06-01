@@ -70,6 +70,7 @@ let mixedTableGroup = "";
 let mixedTableMember = "";
 let mixedTableRangeMode = "default";
 let mixedCheckinGroup = "";
+let mixedCheckinMember = "";
 let checkinViewGroup = "";
 let checkinViewMember = "";
 let checkinViewRangeMode = "default";
@@ -1410,6 +1411,20 @@ function renderMiniBars(containerId, rows, valueKey = "weighted") {
 function configuredItems() {
   return Object.keys(reportData().rules);
 }
+function groupVisibleItems(group, report = reportData()) {
+  const all = Object.keys(report.rules || {});
+  if (!group || group === "__all__") return all;
+  const selected = Array.isArray(report.groupItems?.[group]) ? report.groupItems[group] : all;
+  return all.filter((name) => selected.includes(name));
+}
+function totalsForItems(items = {}, itemNames = configuredItems(), report = reportData()) {
+  const raw = itemNames.reduce((sum, name) => sum + Number(items[name] || 0), 0);
+  const weighted = itemNames.reduce((sum, name) => {
+    const weight = Number(report.rules?.[name] ?? 1);
+    return sum + Number(items[name] || 0) * (Number.isFinite(weight) ? weight : 1);
+  }, 0);
+  return { raw, weighted };
+}
 function memberVisibleItems(member = currentMember) {
   const group = data.memberGroups?.[member] || data.groups[0];
   const groupSelected = data.groupItems?.[group];
@@ -2242,13 +2257,28 @@ function renderHistory() {
     </tr>
   `).join("") || `<tr><td colspan="6" class="hint">还没有历史记录。</td></tr>`;
 }
+function renderGroupOnlySelect(selectId, selectedGroup, report = reportData()) {
+  const select = $(selectId);
+  const groups = report.groups || [];
+  const group = groups.includes(selectedGroup) ? selectedGroup : groups[0] || "";
+  if (select) {
+    select.innerHTML = groups.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
+    select.value = group;
+  }
+  return group;
+}
+function renderValueTabs(containerId, tabs, selectedValue, dataAttr) {
+  const box = $(containerId);
+  if (!box) return;
+  box.innerHTML = tabs.length
+    ? tabs.map(({ value, label }) => `<button class="tab mini ${value === selectedValue ? "active" : ""}" type="button" ${dataAttr}="${escapeAttr(value)}">${escapeHtml(label)}</button>`).join("")
+    : `<span class="hint">暂无成员</span>`;
+}
 function renderMixedOverviewTable() {
   if (!reportDataOverride) return withReportData(selectedReportData(), renderMixedOverviewTable);
   const report = reportData();
   if (!$("mixedTableHead")) return;
-  const pick = renderGroupMemberSelectors("mixedTableGroup", "mixedTableMember", mixedTableGroup, mixedTableMember, true, false);
-  mixedTableGroup = pick.group;
-  mixedTableMember = pick.member;
+  mixedTableGroup = renderGroupOnlySelect("mixedTableGroup", mixedTableGroup, report);
   applyMixedTableDefaultRange();
   let start = $("mixedTableStart").value || currentDate;
   let end = $("mixedTableEnd").value || currentDate;
@@ -2257,23 +2287,32 @@ function renderMixedOverviewTable() {
     $("mixedTableStart").value = start;
     $("mixedTableEnd").value = end;
   }
-  const member = mixedTableMember || membersForGroupValue(mixedTableGroup, report)[0] || "";
+  const members = membersForGroupValue(mixedTableGroup, report);
+  const member = members.includes(mixedTableMember) ? mixedTableMember : members[0] || "";
   mixedTableMember = member;
-  if ($("mixedTableMember") && member) $("mixedTableMember").value = member;
+  if ($("mixedTableMember")) {
+    $("mixedTableMember").innerHTML = members.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
+    if (member) $("mixedTableMember").value = member;
+  }
+  renderValueTabs("mixedMemberTabs", members.map((name) => ({ value: name, label: name })), member, "data-mixed-member-tab");
+  $("mixedMemberTabs")?.querySelectorAll("[data-mixed-member-tab]").forEach((button) => {
+    button.onclick = () => {
+      mixedTableMember = button.dataset.mixedMemberTab || "";
+      renderMixedOverviewTable();
+    };
+  });
   const days = buildDateRange(start, end);
-  const itemNames = configuredItems();
-  const checkinOptions = normalizeCheckinOptions(data.checkinOptions || defaultData.checkinOptions);
+  const itemNames = groupVisibleItems(mixedTableGroup, report);
   const editable = report === data && data.members.includes(member);
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
   let totalWeighted = 0;
   let totalQuota = 0;
   $("mixedTableHint").textContent = member
-    ? `${member} · ${start} 至 ${end} · ${editable ? "可直接编辑，自动同步到今日记录" : "当前范围只读"}`
+    ? `${mixedTableGroup} · ${member} · ${start} 至 ${end} · ${itemNames.length} 个组项目 · ${editable ? "可直接编辑" : "当前范围只读"}`
     : "请选择成员";
   $("mixedTableHead").innerHTML = `
     <tr>
       <th>日期</th>
-      ${checkinPeriods().map((period) => `<th>${period.label}打卡</th>`).join("")}
       ${itemNames.map((name) => `<th>${escapeHtml(name)}</th>`).join("")}
       <th>完成</th>
       <th>定额</th>
@@ -2282,14 +2321,15 @@ function renderMixedOverviewTable() {
     </tr>
   `;
   if (!member) {
-    $("mixedTableBody").innerHTML = `<tr><td colspan="${5 + checkinPeriods().length + itemNames.length}" class="hint">暂无可查看成员。</td></tr>`;
+    $("mixedTableBody").innerHTML = `<tr><td colspan="${5 + itemNames.length}" class="hint">暂无可查看成员。</td></tr>`;
     renderMixedCheckinTable();
     return;
   }
   const rows = days.map((day) => {
     const rec = recordForReport(report, day, member);
     const items = rec?.items || {};
-    const weighted = Number(rec?.weighted_total || 0);
+    const totals = totalsForItems(items, itemNames, report);
+    const weighted = totals.weighted;
     const quota = memberQuota(member, day);
     totalWeighted += weighted;
     totalQuota += quota;
@@ -2300,19 +2340,6 @@ function renderMixedOverviewTable() {
     return `
       <tr>
         <td class="mixed-date">${escapeHtml(day.slice(5))}</td>
-        ${checkinPeriods().map((period) => {
-          const value = rec?.checkins?.[period.key];
-          const status = checkinStatus(value);
-          const time = checkinTimeText(value).replace("记录时间 ", "");
-          const options = normalizeCheckinOptions([...checkinOptions, status].filter(Boolean));
-          return `<td class="mixed-checkin ${status ? "filled" : ""}" title="${escapeAttr(checkinDisplay(value))}">
-            <select data-mixed-checkin data-day="${escapeAttr(day)}" data-member="${escapeAttr(member)}" data-period="${escapeAttr(period.key)}" ${editable ? "" : "disabled"}>
-              <option value=""></option>
-              ${options.map((option) => `<option value="${escapeAttr(option)}" ${status === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
-            </select>
-            ${time ? `<small>${escapeHtml(time)}</small>` : ""}
-          </td>`;
-        }).join("")}
         ${itemNames.map((name) => {
           const amount = Number(items[name] || 0);
           return `<td class="${amount ? "mixed-number" : ""}">
@@ -2332,7 +2359,6 @@ function renderMixedOverviewTable() {
   rows.unshift(`
     <tr class="mixed-summary-row">
       <th>合计</th>
-      ${checkinPeriods().map(() => `<th></th>`).join("")}
       ${itemNames.map((name) => `<th>${fmt(itemTotals[name])}</th>`).join("")}
       <th>${fmt(totalWeighted)}</th>
       <th>${fmt(totalQuota)}</th>
@@ -2413,18 +2439,28 @@ function renderMixedCheckinTable() {
   if (start > end) [start, end] = [end, start];
   const groups = report.groups || [];
   const fallbackGroup = (mixedTableGroup && mixedTableGroup !== "__all__" && groups.includes(mixedTableGroup)) ? mixedTableGroup : groups[0] || "";
-  const group = groups.includes(mixedCheckinGroup) ? mixedCheckinGroup : fallbackGroup;
+  const group = renderGroupOnlySelect("mixedCheckinGroup", groups.includes(mixedCheckinGroup) ? mixedCheckinGroup : fallbackGroup, report);
   mixedCheckinGroup = group;
-  if ($("mixedCheckinGroup")) {
-    $("mixedCheckinGroup").innerHTML = groups.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join("");
-    $("mixedCheckinGroup").value = group;
-  }
   const days = buildDateRange(start, end);
-  const members = membersForGroupValue(group, report);
+  const groupMembers = membersForGroupValue(group, report);
+  if (mixedCheckinMember && !groupMembers.includes(mixedCheckinMember)) mixedCheckinMember = "";
+  renderValueTabs(
+    "mixedCheckinTabs",
+    [{ value: "", label: "全组" }, ...groupMembers.map((name) => ({ value: name, label: name }))],
+    mixedCheckinMember,
+    "data-mixed-checkin-member-tab"
+  );
+  $("mixedCheckinTabs")?.querySelectorAll("[data-mixed-checkin-member-tab]").forEach((button) => {
+    button.onclick = () => {
+      mixedCheckinMember = button.dataset.mixedCheckinMemberTab || "";
+      renderMixedCheckinTable();
+    };
+  });
+  const members = mixedCheckinMember ? [mixedCheckinMember] : groupMembers;
   const checkinOptions = normalizeCheckinOptions(data.checkinOptions || defaultData.checkinOptions);
   const editable = report === data;
   $("mixedCheckinHint").textContent = group
-    ? `${group} · ${start} 至 ${end} · ${members.length} 人一起打卡`
+    ? `${group} · ${mixedCheckinMember || "全组"} · ${start} 至 ${end} · ${members.length} 人`
     : "暂无小组";
   $("mixedCheckinHead").innerHTML = `<tr><th>日期</th><th>成员</th>${checkinPeriods().map((period) => `<th>${period.label}打卡</th>`).join("")}</tr>`;
   const rows = [];
@@ -3169,13 +3205,10 @@ function buildMixedTableWorkbookXml() {
   const report = selectedReportData();
   return withReportData(report, () => {
     const { start, end, days } = mixedTableExportRange();
-    const itemNames = configuredItems();
+    const group = $("mixedTableGroup")?.value || mixedTableGroup || report.groups?.[0] || "";
+    const members = membersForGroupValue(group, report);
+    const itemNames = groupVisibleItems(group, report);
     const periods = checkinPeriods();
-    const pick = {
-      group: $("mixedTableGroup")?.value || mixedTableGroup || "__all__",
-      member: $("mixedTableMember")?.value || mixedTableMember || ""
-    };
-    const member = pick.member || membersForGroupValue(pick.group, report)[0] || reportMembers(report)[0] || "";
     const mixedHeader = [
       "日期",
       "分组",
@@ -3191,47 +3224,34 @@ function buildMixedTableWorkbookXml() {
     ];
     const mixedRows = [mixedHeader];
     days.forEach((day) => {
-      const rec = recordForReport(report, day, member);
-      const weighted = Number(rec?.weighted_total || 0);
-      const raw = Number(rec?.raw_total || 0);
-      const quota = memberQuota(member, day);
-      mixedRows.push([
-        day,
-        report.memberGroups?.[member] || report.groups?.[0] || "",
-        member,
-        ...periods.map((period) => checkinDisplay(rec?.checkins?.[period.key])),
-        ...itemNames.map((name) => Number(rec?.items?.[name] || 0)),
-        raw,
-        weighted,
-        quota,
-        weighted - quota,
-        rec?.status || "",
-        rec?.reason || rec?.harvest || rec?.diary || ""
-      ]);
-    });
-    const checkinHeader = ["日期", "分组", "成员", ...periods.map((period) => `${period.label}打卡`)];
-    const checkinSheets = (report.groups || []).map((group) => {
-      const rows = [checkinHeader];
-      days.forEach((day) => {
-        membersForGroupValue(group, report).forEach((groupMember) => {
-          const rec = recordForReport(report, day, groupMember);
-          rows.push([
-            day,
-            group,
-            groupMember,
-            ...periods.map((period) => checkinDisplay(rec?.checkins?.[period.key]))
-          ]);
-        });
+      members.forEach((member) => {
+        const rec = recordForReport(report, day, member);
+        const totals = totalsForItems(rec?.items || {}, itemNames, report);
+        const weighted = totals.weighted;
+        const raw = totals.raw;
+        const quota = memberQuota(member, day);
+        mixedRows.push([
+          day,
+          report.memberGroups?.[member] || group || report.groups?.[0] || "",
+          member,
+          ...periods.map((period) => checkinDisplay(rec?.checkins?.[period.key])),
+          ...itemNames.map((name) => Number(rec?.items?.[name] || 0)),
+          raw,
+          weighted,
+          quota,
+          weighted - quota,
+          rec?.status || "",
+          rec?.reason || rec?.harvest || rec?.diary || ""
+        ]);
       });
-      return rowsToWorksheet(`${group}打卡`, rows);
     });
-    return { start, end, xml: workbookXml([rowsToWorksheet("混合表格", mixedRows), ...checkinSheets]) };
+    return { group, start, end, xml: workbookXml([rowsToWorksheet(`${group || "混合"}总表`, mixedRows)]) };
   });
 }
 function exportMixedTableWorkbook() {
   saveFormSilently();
-  const { start, end, xml } = buildMixedTableWorkbookXml();
-  downloadExcelXml(xml, `mixed_table_${start}_${end}.xls`);
+  const { group, start, end, xml } = buildMixedTableWorkbookXml();
+  downloadExcelXml(xml, `mixed_table_${group || "all"}_${start}_${end}.xls`);
 }
 function buildCsvBackups() {
   const itemNames = configuredItems();
@@ -3428,13 +3448,17 @@ function bindEvents() {
       renderOverview();
     };
   });
-  ["mixedTableGroup", "mixedTableMember"].forEach((id) => {
-    $(id).onchange = () => {
-      mixedTableGroup = $("mixedTableGroup").value;
-      mixedTableMember = $("mixedTableMember").value;
-      renderMixedOverviewTable();
-    };
-  });
+  $("mixedTableGroup").onchange = () => {
+    mixedTableGroup = $("mixedTableGroup").value;
+    mixedTableMember = "";
+    mixedCheckinGroup = mixedTableGroup;
+    mixedCheckinMember = "";
+    renderMixedOverviewTable();
+  };
+  $("mixedTableMember").onchange = () => {
+    mixedTableMember = $("mixedTableMember").value;
+    renderMixedOverviewTable();
+  };
   ["mixedTableStart", "mixedTableEnd"].forEach((id) => {
     $(id).onchange = () => {
       mixedTableRangeMode = $("mixedTableStart").value || $("mixedTableEnd").value ? "custom" : "default";
@@ -3443,6 +3467,7 @@ function bindEvents() {
   });
   $("mixedCheckinGroup").onchange = () => {
     mixedCheckinGroup = $("mixedCheckinGroup").value;
+    mixedCheckinMember = "";
     renderMixedCheckinTable();
   };
   ["checkinViewGroup", "checkinViewMember"].forEach((id) => {

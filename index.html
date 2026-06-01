@@ -247,10 +247,11 @@
             </div>
             <div class="analysis-controls">
               <select id="mixedTableGroup"></select>
-              <select id="mixedTableMember"></select>
+              <select class="hidden" id="mixedTableMember" aria-hidden="true" tabindex="-1"></select>
               <input id="mixedTableStart" type="date" aria-label="开始日期">
               <input id="mixedTableEnd" type="date" aria-label="结束日期">
             </div>
+            <div class="person-tabs mixed-tabs" id="mixedMemberTabs"></div>
             <div class="table-scroll mixed-table-wrap">
               <table class="mixed-table">
                 <thead id="mixedTableHead"></thead>
@@ -263,6 +264,7 @@
             <div class="analysis-controls mixed-checkin-controls">
               <select id="mixedCheckinGroup"></select>
             </div>
+            <div class="person-tabs mixed-tabs" id="mixedCheckinTabs"></div>
             <div class="table-scroll mixed-table-wrap">
               <table class="mixed-table mixed-checkin-table">
                 <thead id="mixedCheckinHead"></thead>

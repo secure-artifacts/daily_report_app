@@ -273,6 +273,8 @@ tr:last-child td { border-bottom: 0; }
 .cloud-backup-actions button { white-space: nowrap; }
 .source-tabs, .person-tabs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .person-tabs { margin-bottom: 10px; }
+.mixed-tabs { margin-bottom: 0; padding: 2px 0; overflow-x: auto; }
+.mixed-tabs .tab { white-space: nowrap; }
 .inline-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .analysis-controls { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 8px; }
 .mixed-checkin-controls { grid-template-columns: minmax(160px, 260px); }
