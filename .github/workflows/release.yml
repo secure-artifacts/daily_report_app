@@ -43,7 +43,7 @@ jobs:
           zip -r "daily-report-app-${GITHUB_REF_NAME}.zip" "daily-report-app-${GITHUB_REF_NAME}"
 
       - name: Attest Build Provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/*.zip"
 
