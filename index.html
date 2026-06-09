@@ -335,7 +335,7 @@
             <div class="item-check-grid" id="groupItemConfigBox"></div>
           </section>
           <section class="panel">
-            <div class="panel-head"><h2>权限</h2><span class="hint">默认密码 999</span></div>
+            <div class="panel-head"><h2>权限</h2><span class="hint">使用 Vercel 环境变量或管理员设置的强密码</span></div>
             <div class="form-grid">
               <label for="autoAuditToggle">审核模式</label>
               <label class="switch-light"><input id="autoAuditToggle" type="checkbox" disabled> 人工审核（提交后待审核）</label>
@@ -369,6 +369,15 @@
               <button class="primary" id="syncSummaryFolderBtn">同步到汇总</button>
             </div>
             <div class="summary-folder-box" id="summaryFolderBox"></div>
+            <div class="admin-center-panel">
+              <div class="panel-head compact-head"><h3>管理员本地中心</h3><span class="hint">Vercel 满额时先保本机和共享副本</span></div>
+              <div class="sync-status-grid" id="adminCenterStatusBox"></div>
+              <div class="cloud-backup-actions">
+                <button id="mergeAdminCenterBtn">合并到管理员中心</button>
+                <button id="writeAdminCenterFolderBtn">中心写入共享</button>
+                <button class="primary" id="restoreCloudFromAdminCenterBtn">中心回灌Vercel</button>
+              </div>
+            </div>
             <div class="cloud-backup-panel">
               <div class="panel-head compact-head"><h3>云数据库备份</h3><span class="hint">口令只在本次页面打开期间使用</span></div>
               <div class="sync-status-grid" id="cloudBackupStatusBox"></div>

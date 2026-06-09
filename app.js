@@ -413,6 +413,27 @@ function mergeSummaryData(baseSource, sourceData) {
   });
   return normalize(merged);
 }
+function mergeAdminCenterData(baseSource, sourceData) {
+  const base = normalize(baseSource);
+  const source = normalize(sourceData);
+  const merged = normalize({
+    ...base,
+    rules: { ...source.rules, ...base.rules },
+    members: Array.from(new Set([...base.members, ...source.members])),
+    groups: Array.from(new Set([...base.groups, ...source.groups])),
+    memberGroups: { ...source.memberGroups, ...base.memberGroups },
+    groupItems: { ...source.groupItems, ...base.groupItems },
+    memberItems: { ...source.memberItems, ...base.memberItems },
+    memberQuotas: { ...source.memberQuotas, ...base.memberQuotas },
+    dailyQuotas: mergeDailyQuotas(source.dailyQuotas, base.dailyQuotas, "records"),
+    checkinOptions: Array.from(new Set([...(base.checkinOptions || []), ...(source.checkinOptions || [])])),
+    records: { ...base.records }
+  });
+  Object.entries(source.records || {}).forEach(([key, record]) => {
+    merged.records[key] = newerRecord(record, merged.records[key]);
+  });
+  return normalize(merged);
+}
 function makeEmptySummary(seed = data) {
   const empty = normalize(seed);
   empty.members = [];
@@ -1175,6 +1196,27 @@ function renderSummaryFolders() {
       renderSummaryFolders();
     };
   });
+}
+function adminCenterTargetText() {
+  const targets = [];
+  if (desktopApp?.isDesktop) targets.push("本机 data/report_data.json");
+  if (fileHandle) targets.push(cloudLocationLabel || "备用文件");
+  if (summaryDirHandle) targets.push(`${summaryLocationLabel || "汇总文件夹"}\\report_data.json`);
+  return targets.length ? targets.join("、") : "未选择共享副本";
+}
+function renderAdminCenterPanel() {
+  const box = $("adminCenterStatusBox");
+  if (!box) return;
+  const recordCount = Object.keys(data.records || {}).length;
+  const memberCount = data.members?.length || 0;
+  const cachedAt = data.updated_at ? new Date(data.updated_at).toLocaleString("zh-CN") : "暂无";
+  const sourceOk = sourceDatasets.filter((source) => !source.error).length;
+  box.innerHTML = `
+    <div><span>中心副本</span><strong>${recordCount} 条 · ${memberCount} 人</strong></div>
+    <div><span>本机时间</span><strong>${escapeHtml(cachedAt)}</strong></div>
+    <div><span>可合并来源</span><strong>${sourceOk}/${sourceDirHandles.length} 个来源</strong></div>
+    <div><span>共享落点</span><strong>${escapeHtml(adminCenterTargetText())}</strong></div>
+  `;
 }
 function startCloudPolling() {
   window.clearInterval(syncPollTimer);
@@ -2940,6 +2982,7 @@ function render() {
   renderCloudHistoryPanel();
   renderTimezones();
   renderSummaryFolders();
+  renderAdminCenterPanel();
   renderReportSourceTabs();
   $("quotaInput").value = String(data.quota);
   preview();
@@ -3137,6 +3180,7 @@ async function refreshSourceDatasets() {
     if (!sourceDatasets[index]) activeReportSource = sourceDatasets.length ? "all" : "current";
   }
   renderSummaryFolders();
+  renderAdminCenterPanel();
   renderReportSourceTabs();
   renderOverview();
   renderHistory();
@@ -3160,6 +3204,7 @@ async function addSourceFolder() {
   await saveSummaryFolders();
   if (superAdminUnlocked) await refreshSourceDatasets();
   renderSummaryFolders();
+  renderAdminCenterPanel();
 }
 async function chooseSummaryFolder() {
   if (!("showDirectoryPicker" in window)) return alert("当前浏览器不支持选择文件夹，请用新版 Chrome/Edge。");
@@ -3169,6 +3214,7 @@ async function chooseSummaryFolder() {
   summaryLocationLabel = dir.name || "汇总文件夹";
   await saveSummaryFolders();
   renderSummaryFolders();
+  renderAdminCenterPanel();
 }
 async function syncSummaryFolder() {
   if (!summaryDirHandle) return alert("请先选择汇总文件夹。");
@@ -3191,7 +3237,92 @@ async function syncSummaryFolder() {
   if (superAdminUnlocked) activeReportSource = "all";
   await refreshSourceDatasets();
   setSyncStatus(`已汇总 ${count} 个来源 · ${new Date().toLocaleTimeString("zh-CN")}`, summaryLocationLabel || cloudLocationLabel);
+  renderAdminCenterPanel();
   showDialog("汇总完成", `已经把 ${count} 个来源文件夹写入汇总文件夹。当前组文件夹数据没有被替换。`, "");
+}
+async function buildAdminCenterSnapshot() {
+  saveFormSilently();
+  let merged = normalize(data);
+  let sourceCount = 0;
+  if (sourceDirHandles.length) {
+    await refreshSourceDatasets();
+    sourceDatasets.forEach((source) => {
+      if (source.error) return;
+      merged = mergeAdminCenterData(merged, source.data);
+      sourceCount += 1;
+    });
+  }
+  if (summaryDirHandle) {
+    try {
+      merged = mergeAdminCenterData(merged, await readDirectoryReport(summaryDirHandle));
+      sourceCount += 1;
+    } catch (error) {
+      console.warn(error);
+    }
+  }
+  merged.updated_at = new Date().toISOString();
+  return { data: normalize(merged), sourceCount };
+}
+async function mergeToAdminCenter() {
+  if (!adminUnlocked) return setView("admin");
+  createBackup("管理员中心合并前备份");
+  const snapshot = await buildAdminCenterSnapshot();
+  data = snapshot.data;
+  if (!data.members.includes(currentMember)) currentMember = data.members[0] || currentMember;
+  persistLocal();
+  loadForm();
+  render();
+  setSyncStatus(`已合并到管理员本地中心 · ${new Date().toLocaleTimeString("zh-CN")}`, cloudLocationLabel);
+  showDialog("管理员中心已更新", `已合并 ${snapshot.sourceCount} 个共享来源。本机中心现在有 ${Object.keys(data.records || {}).length} 条记录。`, "");
+}
+async function writeAdminCenterToSharedTargets() {
+  if (!adminUnlocked) return setView("admin");
+  saveFormSilently();
+  createBackup("管理员中心写共享前备份");
+  persistLocal();
+  const written = [];
+  if (desktopApp?.isDesktop) {
+    const result = await desktopApp.writeCloudData(data);
+    if (result?.path) {
+      lastFileModified = result.mtime || lastFileModified;
+      cloudLocationLabel = result.path;
+      lastCloudText = JSON.stringify(data, null, 2);
+      written.push(result.path);
+    }
+  }
+  if (fileHandle) {
+    const nextText = JSON.stringify(normalize(data), null, 2);
+    const writable = await fileHandle.createWritable();
+    await writable.write(nextText);
+    await writable.close();
+    lastCloudText = nextText;
+    written.push(cloudLocationLabel || "备用文件");
+  }
+  if (summaryDirHandle) {
+    await writeDirectoryReport(summaryDirHandle, data);
+    written.push(`${summaryLocationLabel || "汇总文件夹"}\\report_data.json`);
+  }
+  if (!written.length) return alert("请先选择备用文件夹或汇总文件夹，才能把管理员中心写到共享副本。");
+  setSyncStatus(`管理员中心已写入共享 · ${new Date().toLocaleTimeString("zh-CN")}`, cloudLocationLabel);
+  renderAdminCenterPanel();
+  showDialog("共享副本已更新", `管理员中心已写入：${written.join("、")}`, "");
+}
+async function restoreCloudFromAdminCenter() {
+  if (!adminUnlocked) return setView("admin");
+  saveFormSilently();
+  persistLocal();
+  if (!confirm("确定用管理员本地中心回灌 Vercel 云库？会与云端现有数据自动合并，并优先保留管理员本机配置。")) return;
+  const result = await saveCloudDatabaseData("admin", false);
+  renderAdminCenterPanel();
+  if (result?.written) {
+    await refreshCloudHistory(true).catch(() => {});
+    showDialog("Vercel 云库已回灌", `已用管理员本地中心写回 Vercel，共 ${Object.keys(data.records || {}).length} 条记录。`, "");
+    return;
+  }
+  const message = result?.reason === "cloud-quota-paused"
+    ? "Vercel/Neon 流量额度仍然满，管理员中心已经保留在本机和可选共享副本里。额度恢复后再点“中心回灌Vercel”。"
+    : "暂时无法写入 Vercel，请确认 DATABASE_URL 和 TEAM_SYNC_TOKEN 配置正常。管理员中心仍保存在本机。";
+  showDialog("暂时无法回灌", message, "");
 }
 async function clearSourceFolders() {
   if (!confirm("确定清空来源文件夹列表？不会删除任何云端数据。")) return;
@@ -3202,6 +3333,7 @@ async function clearSourceFolders() {
   activeReportSource = "current";
   await saveSummaryFolders();
   renderSummaryFolders();
+  renderAdminCenterPanel();
   renderReportSourceTabs();
   renderOverview();
 }
@@ -3795,6 +3927,9 @@ function bindEvents() {
   $("clearSourceFoldersBtn").onclick = () => clearSourceFolders();
   $("chooseSummaryFolderBtn").onclick = () => chooseSummaryFolder().catch((err) => alert(`选择汇总失败：${err.message}`));
   $("syncSummaryFolderBtn").onclick = () => syncSummaryFolder().catch((err) => alert(`汇总失败：${err.message}`));
+  $("mergeAdminCenterBtn").onclick = () => mergeToAdminCenter().catch((err) => alert(`合并失败：${err.message}`));
+  $("writeAdminCenterFolderBtn").onclick = () => writeAdminCenterToSharedTargets().catch((err) => alert(`写入共享失败：${err.message}`));
+  $("restoreCloudFromAdminCenterBtn").onclick = () => restoreCloudFromAdminCenter().catch((err) => alert(`回灌失败：${err.message}`));
   $("cloudBackupStatusBtn").onclick = () => refreshCloudBackupStatus(false).catch((err) => alert(`云数据库检查失败：${err.message}`));
   $("cloudBackupNowBtn").onclick = () => backupToCloudDatabase().catch((err) => {
     setCloudBackupStatus(`备份失败：${err.message}`);
