@@ -72,6 +72,11 @@ function send(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function isQuotaError(error) {
+  const text = `${error?.message || ""} ${JSON.stringify(error || {})}`.toLowerCase();
+  return Number(error?.statusCode || error?.status || 0) === 402 || /quota|额度|transfer/.test(text);
+}
+
 function authTokens(extraTokens = []) {
   return [
     process.env.TEAM_SYNC_TOKEN,
@@ -406,6 +411,16 @@ async function readState(sql) {
   return rows[0] || null;
 }
 
+async function readStateMeta(sql) {
+  const rows = await sql`
+    SELECT updated_at, client_updated_at, source, record_count, member_count, group_count, data_sha256
+    FROM daily_report_cloud_state
+    WHERE id = 'latest'
+    LIMIT 1
+  `;
+  return rows[0] || null;
+}
+
 function publicStateMeta(state) {
   if (!state) return null;
   return {
@@ -517,11 +532,11 @@ module.exports = async function handler(req, res) {
     const sql = database();
     if (!sql) return send(res, 503, { ok: false, error: "Vercel 还没有配置 DATABASE_URL 或 POSTGRES_URL。" });
     await ensureSchema(sql);
-    const state = await readState(sql);
     if (!authTokens().length) return send(res, 503, { ok: false, error: "Vercel 还没有配置 TEAM_SYNC_TOKEN 或 APP_PASSWORD。" });
     if (!hasValidToken(req)) return send(res, 401, { ok: false, error: "云同步口令不正确。" });
 
     if (req.method === "GET") {
+      const state = await readState(sql);
       return send(res, 200, {
         ok: true,
         data: state?.data || null,
@@ -531,7 +546,12 @@ module.exports = async function handler(req, res) {
 
     const body = await readJson(req);
     const action = String(body.action || "save");
+    if (action === "meta") {
+      const state = await readStateMeta(sql);
+      return send(res, 200, { ok: true, meta: publicStateMeta(state) });
+    }
     if (action === "pull") {
+      const state = await readState(sql);
       return send(res, 200, { ok: true, data: state?.data || null, meta: publicStateMeta(state) });
     }
     if (action === "history") {
@@ -545,12 +565,17 @@ module.exports = async function handler(req, res) {
       if (!body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
         return send(res, 400, { ok: false, error: "缺少可同步的数据。" });
       }
+      const state = await readState(sql);
       const merged = mergeCloudData(state?.data || null, body.data, body.mode === "admin" ? "admin" : "records");
       const saved = await writeState(sql, merged, body.mode === "admin" ? "admin-sync" : "team-sync", body.actor || "", body.mode === "admin" ? "admin" : "records");
       return send(res, 200, { ok: true, ...saved });
     }
     return send(res, 400, { ok: false, error: "未知云同步动作。" });
   } catch (error) {
-    return send(res, error.statusCode || 500, { ok: false, error: error.message || "云同步失败。" });
+    const statusCode = error.statusCode || error.status || 500;
+    const message = isQuotaError(error)
+      ? "云数据库流量额度已满，已暂停云同步请求。请在 Neon/Vercel 恢复额度、升级或更换 DATABASE_URL 后再同步。"
+      : (error.message || "云同步失败。");
+    return send(res, statusCode, { ok: false, error: message });
   }
 };
