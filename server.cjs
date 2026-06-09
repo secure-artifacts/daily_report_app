@@ -125,6 +125,15 @@ function sendJson(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function normalizeSyncEndpoint(value) {
+  let text = String(value || "").trim();
+  if (!text) return "";
+  text = text.replace(/\/+$/, "");
+  text = text.replace(/\/api\/cloud-data$/i, "").replace(/\/cloud-data$/i, "");
+  text = text.replace(/\/api\/app-auth$/i, "").replace(/\/app-auth$/i, "");
+  return text.replace(/\/+$/, "");
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -152,6 +161,12 @@ function readBody(req) {
 
 async function handleApi(req, res, pathname) {
   const data = readData();
+  if (pathname === "/api/sync-config" && req.method === "GET") {
+    return sendJson(res, 200, {
+      ok: true,
+      endpoint: normalizeSyncEndpoint(process.env.CLOUD_SYNC_ENDPOINT || process.env.CLOUDFLARE_SYNC_URL || process.env.CLOUDFLARE_WORKER_URL || "")
+    });
+  }
   if (pathname === "/api/app-auth" && req.method === "GET") {
     return sendJson(res, 200, { ok: true, configured: Boolean(process.env.APP_PASSWORD || process.env.TEAM_SYNC_TOKEN || data.adminPassword) });
   }

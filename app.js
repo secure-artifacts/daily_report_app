@@ -88,6 +88,7 @@ let collapsedGroups = JSON.parse(localStorage.getItem("dailyReportCollapsedGroup
 let lastTypingAt = 0;
 let sharedReplicaCount = 0;
 let cloudSyncEndpoint = loadCloudSyncEndpoint();
+let cloudSyncEndpointFromEnv = "";
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
 const recordKey = () => `${currentDate}|${currentMember}`;
@@ -125,6 +126,22 @@ function saveCloudSyncEndpoint(value) {
   syncCloudEndpointInputs();
   renderSyncPanel();
   return cloudSyncEndpoint;
+}
+function setCloudSyncEndpointFromEnv(value) {
+  cloudSyncEndpointFromEnv = normalizeCloudSyncEndpoint(value);
+  if (!loadCloudSyncEndpoint()) cloudSyncEndpoint = cloudSyncEndpointFromEnv;
+  syncCloudEndpointInputs();
+  renderSyncPanel();
+}
+async function loadCloudSyncConfig() {
+  if (window.location.protocol === "file:" || typeof fetch !== "function") return;
+  try {
+    const response = await fetch("/api/sync-config", { cache: "no-store" });
+    const result = await response.json();
+    if (response.ok && result.ok) setCloudSyncEndpointFromEnv(result.endpoint || "");
+  } catch {
+    // Vercel/local config endpoint is optional; manual endpoint entry still works.
+  }
 }
 function cloudSyncProviderLabel() {
   return cloudSyncEndpoint ? "Cloudflare Worker" : "Vercel 云库";
@@ -991,6 +1008,7 @@ async function refreshCloudDatabaseStatus(silent = false) {
       const result = await response.json();
       if (!result.configured) setCloudDbStatus(cloudSyncEndpoint ? "未配置 D1 数据库" : "未配置 DATABASE_URL");
       else if (!result.protected) setCloudDbStatus("未配置 TEAM_SYNC_TOKEN");
+      else if (cloudSyncEndpoint && result.encrypted === false) setCloudDbStatus("未配置加密密钥");
       else setCloudDbStatus("已配置，登录后自动同步");
     } catch {
       setCloudDbStatus("未检测到云同步 API");
@@ -3145,10 +3163,11 @@ async function unlockApp() {
 function updateCloudSyncEndpointFromAdmin(clear = false) {
   const next = clear ? "" : ($("cloudSyncEndpointAdminInput")?.value || "");
   saveCloudSyncEndpoint(next);
+  if (clear && cloudSyncEndpointFromEnv) setCloudSyncEndpointFromEnv(cloudSyncEndpointFromEnv);
   cloudDbLastSeenSha = "";
   cloudDbQuotaPausedUntil = 0;
   refreshCloudDatabaseStatus(true);
-  showDialog(clear ? "备用云地址已清空" : "备用云地址已保存", clear ? "当前云同步会回到 Vercel 默认接口。" : `当前云同步会优先连接：${cloudSyncEndpoint}`, "");
+  showDialog(clear ? "备用云地址已清空" : "备用云地址已保存", clear ? (cloudSyncEndpoint ? `已清空本机手动地址，当前使用 Vercel 下发地址：${cloudSyncEndpoint}` : "当前云同步会回到 Vercel 默认接口。") : `当前云同步会优先连接：${cloudSyncEndpoint}`, "");
 }
 async function chooseSharedFile() {
   if (desktopApp?.isDesktop) {
@@ -3453,7 +3472,7 @@ async function restoreCloudFromAdminCenter() {
     return;
   }
   const message = result?.reason === "cloud-quota-paused"
-    ? "云同步额度仍然满或暂时不可用，管理员中心已经保留在本机和可选共享副本里。服务恢复后再点“中心回灌Vercel”。"
+    ? "云同步额度仍然满或暂时不可用，管理员中心已经保留在本机和可选共享副本里。服务恢复后再点“中心回灌云同步”。"
     : "暂时无法写入云同步，请确认同步地址和 TEAM_SYNC_TOKEN 配置正常。管理员中心仍保存在本机。";
   showDialog("暂时无法回灌", message, "");
 }
@@ -4127,7 +4146,7 @@ loadForm();
 render();
 setView(activeView);
 restoreCloudDirectory();
-refreshCloudDatabaseStatus(true);
+loadCloudSyncConfig().then(() => refreshCloudDatabaseStatus(true));
 refreshCloudBackupStatus(true);
 startCloudPolling();
 window.addEventListener("focus", () => {

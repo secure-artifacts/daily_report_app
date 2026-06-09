@@ -246,6 +246,59 @@ async function digestData(data) {
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function encryptionSecret(env) {
+  return String(env.CLOUD_SYNC_ENCRYPTION_KEY || env.DATA_ENCRYPTION_KEY || env.ENCRYPTION_KEY || "").trim();
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function base64ToBytes(text) {
+  const binary = atob(String(text || ""));
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+async function encryptionKey(env) {
+  const secret = encryptionSecret(env);
+  if (!secret) {
+    const error = new Error("Cloudflare Worker 未配置 CLOUD_SYNC_ENCRYPTION_KEY，D1 不会写入未加密数据。");
+    error.status = 503;
+    throw error;
+  }
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function encodeStoredData(data, env) {
+  const key = await encryptionKey(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(JSON.stringify(data));
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+  return JSON.stringify({
+    encrypted: true,
+    v: 1,
+    alg: "AES-GCM",
+    iv: bytesToBase64(iv),
+    data: bytesToBase64(new Uint8Array(ciphertext))
+  });
+}
+
+async function decodeStoredData(text, env) {
+  if (!text) return null;
+  const parsed = JSON.parse(text);
+  if (!parsed?.encrypted) return parsed;
+  const key = await encryptionKey(env);
+  const iv = base64ToBytes(parsed.iv);
+  const ciphertext = base64ToBytes(parsed.data);
+  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
 async function ensureSchema(db) {
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS daily_report_cloud_state (
@@ -277,13 +330,13 @@ async function ensureSchema(db) {
   await db.prepare(`CREATE INDEX IF NOT EXISTS daily_report_cloud_events_created_at ON daily_report_cloud_events (created_at DESC)`).run();
 }
 
-async function readState(db, includeData = true) {
+async function readState(db, env, includeData = true) {
   const columns = includeData
     ? "updated_at, client_updated_at, source, record_count, member_count, group_count, data_sha256, data"
     : "updated_at, client_updated_at, source, record_count, member_count, group_count, data_sha256";
   const row = await db.prepare(`SELECT ${columns} FROM daily_report_cloud_state WHERE id = 'latest' LIMIT 1`).first();
   if (!row) return null;
-  if (includeData) row.data = JSON.parse(row.data || "null");
+  if (includeData) row.data = await decodeStoredData(row.data, env);
   return row;
 }
 
@@ -300,11 +353,11 @@ function publicStateMeta(state) {
   };
 }
 
-async function writeState(db, nextData, source = "team-sync", actor = "", mode = "records") {
+async function writeState(db, env, nextData, source = "team-sync", actor = "", mode = "records") {
   const normalized = normalize(nextData);
   normalized.updated_at = new Date().toISOString();
   const now = new Date().toISOString();
-  const serialized = JSON.stringify(normalized);
+  const serialized = await encodeStoredData(normalized, env);
   const sha = await digestData(normalized);
   const stats = dataStats(normalized);
   const eventId = `event_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
@@ -353,39 +406,46 @@ async function listEvents(db) {
   return result.results || [];
 }
 
-async function restoreEvent(db, eventId) {
+async function restoreEvent(db, env, eventId) {
   const row = await db.prepare(`SELECT id, actor, data FROM daily_report_cloud_events WHERE id = ? LIMIT 1`).bind(eventId).first();
   if (!row) return { error: "没有找到这个历史版本。", status: 404 };
-  return writeState(db, JSON.parse(row.data), "history-restore", `恢复:${row.actor || row.id}`, "admin");
+  return writeState(db, env, await decodeStoredData(row.data, env), "history-restore", `恢复:${row.actor || row.id}`, "admin");
 }
 
 async function handleCloudData(request, env) {
-  if (!env.DB) return json({ ok: false, error: "Cloudflare Worker 未绑定 D1 数据库 DB。" }, 503);
   if (request.method === "GET" && !tokenFromRequest(request)) {
-    return json({ ok: true, configured: true, protected: authTokens(env).length > 0, provider: "cloudflare-d1" });
+    return json({
+      ok: true,
+      configured: Boolean(env.DB),
+      protected: authTokens(env).length > 0,
+      encrypted: Boolean(encryptionSecret(env)),
+      provider: "cloudflare-d1"
+    });
   }
+  if (!env.DB) return json({ ok: false, error: "Cloudflare Worker 未绑定 D1 数据库 DB。" }, 503);
   if (request.method !== "GET" && request.method !== "POST") return json({ ok: false, error: "Method Not Allowed" }, 405);
   await ensureSchema(env.DB);
+  if (!encryptionSecret(env)) return json({ ok: false, error: "Cloudflare Worker 未配置 CLOUD_SYNC_ENCRYPTION_KEY，D1 不会写入未加密数据。" }, 503);
   if (!authTokens(env).length) return json({ ok: false, error: "Cloudflare Worker 还没有配置 TEAM_SYNC_TOKEN 或 APP_PASSWORD。" }, 503);
   if (!hasValidToken(request, env)) return json({ ok: false, error: "云同步口令不正确。" }, 401);
   if (request.method === "GET") {
-    const state = await readState(env.DB, true);
+    const state = await readState(env.DB, env, true);
     return json({ ok: true, data: state?.data || null, meta: publicStateMeta(state) });
   }
   const body = await readJson(request);
   const action = String(body.action || "save");
   if (action === "meta") {
-    const state = await readState(env.DB, false);
+    const state = await readState(env.DB, env, false);
     return json({ ok: true, meta: publicStateMeta(state) });
   }
   if (action === "pull") {
-    const state = await readState(env.DB, true);
+    const state = await readState(env.DB, env, true);
     return json({ ok: true, data: state?.data || null, meta: publicStateMeta(state) });
   }
   if (action === "history") return json({ ok: true, events: await listEvents(env.DB) });
   if (action === "restore_history") {
     if (!body.eventId) return json({ ok: false, error: "缺少历史版本 ID。" }, 400);
-    const restored = await restoreEvent(env.DB, String(body.eventId));
+    const restored = await restoreEvent(env.DB, env, String(body.eventId));
     if (restored.error) return json({ ok: false, error: restored.error }, restored.status || 500);
     return json({ ok: true, ...restored });
   }
@@ -393,9 +453,9 @@ async function handleCloudData(request, env) {
     if (!body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
       return json({ ok: false, error: "缺少可同步的数据。" }, 400);
     }
-    const state = await readState(env.DB, true);
+    const state = await readState(env.DB, env, true);
     const merged = mergeCloudData(state?.data || null, body.data, body.mode === "admin" ? "admin" : "records");
-    return json({ ok: true, ...(await writeState(env.DB, merged, body.mode === "admin" ? "admin-sync" : "team-sync", body.actor || "", body.mode === "admin" ? "admin" : "records")) });
+    return json({ ok: true, ...(await writeState(env.DB, env, merged, body.mode === "admin" ? "admin-sync" : "team-sync", body.actor || "", body.mode === "admin" ? "admin" : "records")) });
   }
   return json({ ok: false, error: "未知云同步动作。" }, 400);
 }

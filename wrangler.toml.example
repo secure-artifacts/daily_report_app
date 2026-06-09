@@ -9,5 +9,6 @@ database_id = "replace-with-your-d1-database-id"
 
 # Set secrets with:
 # wrangler secret put TEAM_SYNC_TOKEN
+# wrangler secret put CLOUD_SYNC_ENCRYPTION_KEY
 # Optional:
 # wrangler secret put APP_PASSWORD

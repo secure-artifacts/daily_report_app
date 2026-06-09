@@ -35,7 +35,7 @@ Vercel 云同步会使用同一张最新状态表：
 
 1. “合并到管理员中心”会把当前本机草稿、已添加来源文件夹和可读取的汇总文件夹合并到管理员浏览器本地副本。
 2. “中心写入共享”会把管理员中心写入已选择的备用文件夹或汇总文件夹，适合 Vercel/Neon 额度满时先保底。
-3. “中心回灌Vercel”会在云数据库恢复后，把管理员本地中心重新写回 Vercel 云库。
+3. “中心回灌云同步”会在云数据库恢复后，把管理员本地中心重新写回当前选中的云同步通道。
 
 成员网页不能直接写入管理员电脑硬盘；如果 Vercel 不可用，成员数据会先留在成员自己的浏览器草稿，或写入成员已经选择的同一个共享文件夹。管理员再通过来源文件夹合并到中心。
 
@@ -49,10 +49,12 @@ Vercel 云同步会使用同一张最新状态表：
 2. 创建 Worker，把 `cloudflare-worker.mjs` 作为 Worker 代码；如果用 Wrangler，可以复制 `wrangler.toml.example` 为 `wrangler.toml` 后填写 D1 的 `database_id`。
 3. 给 Worker 绑定 D1，绑定名必须是 `DB`。
 4. 给 Worker 设置 Secret：`TEAM_SYNC_TOKEN`，也可以设置 `APP_PASSWORD`；值要和成员登录用的应用密码一致。
-5. 部署 Worker 后，复制 Worker URL，例如 `https://daily-report-sync.xxx.workers.dev`。
-6. 成员打开原来的 Vercel 页面，在登录页“备用云同步地址”里填写这个 Worker URL，再输入应用密码进入。
+5. 给 Worker 设置 Secret：`CLOUD_SYNC_ENCRYPTION_KEY`，请使用 32 位以上随机字符串。没有这个密钥时 Worker 会拒绝写入，避免 D1 保存明文数据。
+6. 部署 Worker 后，复制 Worker URL，例如 `https://daily-report-sync.xxx.workers.dev`。
+7. 在 Vercel 项目 Environment Variables 里添加 `CLOUD_SYNC_ENDPOINT`，值填 Worker URL，然后重新部署。也可以用 `CLOUDFLARE_SYNC_URL` 或 `CLOUDFLARE_WORKER_URL`。
+8. 成员打开原来的 Vercel 页面后会自动使用这个 Worker URL；如果需要临时覆盖，也可以在登录页“备用云同步地址”里手动填写。
 
-Worker 提供 `/api/app-auth` 和 `/api/cloud-data`，会自动创建 `daily_report_cloud_state` 和 `daily_report_cloud_events` 两张 D1 表。管理员可以在 Vercel 和 Cloudflare 两个云之间切换地址，必要时用“中心回灌Vercel”或保存配置把本地中心写回当前选中的云同步通道。
+Worker 提供 `/api/app-auth` 和 `/api/cloud-data`，会自动创建 `daily_report_cloud_state` 和 `daily_report_cloud_events` 两张 D1 表。写入 D1 的 `data` 字段是 AES-GCM 加密包；Worker 用 `CLOUD_SYNC_ENCRYPTION_KEY` 解密后再与前端同步。管理员可以在 Vercel 和 Cloudflare 两个云之间切换地址，必要时用“中心回灌云同步”或保存配置把本地中心写回当前选中的云同步通道。
 
 ## 云数据库备份（可选）
 
@@ -71,7 +73,8 @@ Worker 提供 `/api/app-auth` 和 `/api/cloud-data`，会自动创建 `daily_rep
 
 ## Vercel 数据安全
 
-- `DATABASE_URL` / `POSTGRES_URL`、`TEAM_SYNC_TOKEN`、`APP_PASSWORD` 和 `CLOUD_BACKUP_TOKEN` 只能配置在 Vercel Environment Variables，不要写入代码、README 或任何 JSON 数据文件。
+- `DATABASE_URL` / `POSTGRES_URL`、`TEAM_SYNC_TOKEN`、`APP_PASSWORD`、`CLOUD_BACKUP_TOKEN` 和 `CLOUD_SYNC_ENDPOINT` 只能配置在 Vercel Environment Variables，不要写入代码、README 或任何 JSON 数据文件。
+- Cloudflare Worker 的 `CLOUD_SYNC_ENCRYPTION_KEY` 只能配置为 Worker Secret，不要配置到 Vercel，也不要发给成员。
 - 团队实时同步接口只接受 `TEAM_SYNC_TOKEN` 或 `APP_PASSWORD`；云备份接口只接受 `CLOUD_BACKUP_TOKEN`，两类口令不再混用。
 - 项目不再内置默认密码，首次使用前必须自行配置强口令。
 - Vercel 响应默认 `no-store`，并附加 CSP、`nosniff`、`frame-ancestors 'none'` 等安全头，降低缓存、点击劫持和资源注入风险。
@@ -91,9 +94,10 @@ Worker 提供 `/api/app-auth` 和 `/api/cloud-data`，会自动创建 `daily_rep
 
 - 顶部同步状态里 “Vercel 云库” 是否显示“已写入 Vercel 云库”或“已读取 Vercel 云库”。
 - Vercel 是否配置了 `POSTGRES_URL` 或 `DATABASE_URL`，是否配置了 `TEAM_SYNC_TOKEN`，并且成员输入的应用密码是否等于 `TEAM_SYNC_TOKEN`。
-- 如果 Vercel/Neon 额度满了，先部署 Cloudflare Worker + D1，把 Worker URL 填到“备用云同步地址”，成员就能继续云端同步。
+- 如果 Vercel/Neon 额度满了，先部署 Cloudflare Worker + D1，把 Worker URL 配到 Vercel 的 `CLOUD_SYNC_ENDPOINT`，成员刷新后就能继续云端同步。
+- 如果云同步显示“未配置加密密钥”，需要在 Cloudflare Worker Secret 里添加 `CLOUD_SYNC_ENCRYPTION_KEY` 并重新部署 Worker。
 - 如果没有配置 Vercel 云同步，再由管理员检查是否在后台选择了团队共享的 Google Drive 本地同步文件夹。
-- 如果 Vercel/Neon 提示流量额度满，先不要清浏览器缓存；管理员用“合并到管理员中心”和“中心写入共享”保底，额度恢复后再点“中心回灌Vercel”。
+- 如果 Vercel/Neon 提示流量额度满，先不要清浏览器缓存；管理员用“合并到管理员中心”和“中心写入共享”保底，额度恢复后再点“中心回灌云同步”。
 - 管理员密码只解锁当前浏览器的管理员页面，不会把不同电脑变成同一份本地中心；跨电脑保底需要所有人选择同一个共享文件夹，或等待 Vercel 云同步恢复。
 - 如果提示“未选择云端文件夹，也未写入 Vercel 云库”，这次只保存到了他自己的浏览器草稿。
 - 所有人是否选择的是同一个共享文件夹，而不是各自电脑里的普通文件夹。
