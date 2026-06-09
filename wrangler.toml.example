@@ -1,0 +1,13 @@
+name = "daily-report-sync"
+main = "cloudflare-worker.mjs"
+compatibility_date = "2026-06-09"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "daily-report-sync"
+database_id = "replace-with-your-d1-database-id"
+
+# Set secrets with:
+# wrangler secret put TEAM_SYNC_TOKEN
+# Optional:
+# wrangler secret put APP_PASSWORD

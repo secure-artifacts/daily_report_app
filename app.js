@@ -41,7 +41,7 @@ let lastFileModified = 0;
 let lastCloudText = "";
 let cloudLocationLabel = "";
 let syncStatusText = "未连接云端文件夹";
-let cloudDbStatusText = "未连接 Vercel 云数据库";
+let cloudDbStatusText = "未连接云同步";
 let cloudDbLastMeta = null;
 let cloudHistoryEvents = [];
 let cloudDbPollTimer = 0;
@@ -87,6 +87,7 @@ let appUnlocked = false;
 let collapsedGroups = JSON.parse(localStorage.getItem("dailyReportCollapsedGroups") || "{}");
 let lastTypingAt = 0;
 let sharedReplicaCount = 0;
+let cloudSyncEndpoint = loadCloudSyncEndpoint();
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
 const recordKey = () => `${currentDate}|${currentMember}`;
@@ -105,6 +106,36 @@ function loadClientId() {
     : `client_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   localStorage.setItem("dailyReportClientId", next);
   return next;
+}
+function normalizeCloudSyncEndpoint(value) {
+  let text = String(value || "").trim();
+  if (!text) return "";
+  text = text.replace(/\/+$/, "");
+  text = text.replace(/\/api\/cloud-data$/i, "").replace(/\/cloud-data$/i, "");
+  text = text.replace(/\/api\/app-auth$/i, "").replace(/\/app-auth$/i, "");
+  return text.replace(/\/+$/, "");
+}
+function loadCloudSyncEndpoint() {
+  return normalizeCloudSyncEndpoint(localStorage.getItem("dailyReportCloudSyncEndpoint") || "");
+}
+function saveCloudSyncEndpoint(value) {
+  cloudSyncEndpoint = normalizeCloudSyncEndpoint(value);
+  if (cloudSyncEndpoint) localStorage.setItem("dailyReportCloudSyncEndpoint", cloudSyncEndpoint);
+  else localStorage.removeItem("dailyReportCloudSyncEndpoint");
+  syncCloudEndpointInputs();
+  renderSyncPanel();
+  return cloudSyncEndpoint;
+}
+function cloudSyncProviderLabel() {
+  return cloudSyncEndpoint ? "Cloudflare Worker" : "Vercel 云库";
+}
+function cloudApiUrl(path) {
+  const nextPath = path.startsWith("/") ? path : `/${path}`;
+  return cloudSyncEndpoint ? `${cloudSyncEndpoint}${nextPath}` : nextPath;
+}
+function syncCloudEndpointInputs() {
+  if ($("cloudSyncEndpointInput")) $("cloudSyncEndpointInput").value = cloudSyncEndpoint;
+  if ($("cloudSyncEndpointAdminInput")) $("cloudSyncEndpointAdminInput").value = cloudSyncEndpoint;
 }
 function todayLocalKey() {
   const now = new Date();
@@ -536,10 +567,10 @@ async function persistEverywhere(mode = "records") {
       return { written: true, cloudDbWritten: cloudDbResult?.written === true, folderWritten: true, clientReplicaWritten: true };
     }
     if (cloudDbResult?.written) {
-      setSyncStatus("已写入 Vercel 云库，未选择文件夹备份");
+      setSyncStatus(`已写入${cloudSyncProviderLabel()}，未选择文件夹备份`);
       return { written: true, cloudDbWritten: true, folderWritten: false };
     }
-    setSyncStatus("未选择云端文件夹，也未写入 Vercel 云库，只保存了本地草稿");
+    setSyncStatus(`未选择云端文件夹，也未写入${cloudSyncProviderLabel()}，只保存了本地草稿`);
     return { written: false, cloudDbWritten: false, folderWritten: false, reason: cloudDbResult?.reason || "missing-cloud-target" };
   }
   try {
@@ -554,7 +585,7 @@ async function persistEverywhere(mode = "records") {
     return { written: true, cloudDbWritten: cloudDbResult?.written === true, folderWritten: true };
   } catch {
     if (cloudDbResult?.written) {
-      setSyncStatus("已写入 Vercel 云库，文件夹备份写入失败");
+      setSyncStatus(`已写入${cloudSyncProviderLabel()}，文件夹备份写入失败`);
       return { written: true, cloudDbWritten: true, folderWritten: false, reason: "folder-write-failed" };
     }
     if (clientReplicaPath) {
@@ -841,20 +872,21 @@ function renderSyncPanel() {
   const recordCount = Object.keys(data.records || {}).length;
   const connected = Boolean(fileHandle || desktopApp?.isDesktop);
   const quotaPaused = isCloudDbQuotaPaused();
+  const provider = cloudSyncProviderLabel();
   const dbReady = Boolean(appSessionPassword && cloudDatabaseAvailable() && !quotaPaused && !/未配置|失败|不可用|额度|暂停|未登录/.test(cloudDbStatusText));
   const syncMode = quotaPaused
     ? `云库额度暂停 · 约 ${cloudDbPauseRemainingText()} 后重试`
-    : (dbReady ? `Vercel 云库主同步 · ${cloudDbPollMs / 1000} 秒轻量检查` : (connected ? `${syncPollMs / 1000} 秒刷新` : "未连接时不会进入团队总数据"));
+    : (dbReady ? `${provider}主同步 · ${cloudDbPollMs / 1000} 秒轻量检查` : (connected ? `${syncPollMs / 1000} 秒刷新` : "未连接时不会进入团队总数据"));
   box.innerHTML = `
     <div><span>云端挂载</span><strong>${escapeHtml(cloudLocationLabel || "未选择")}</strong></div>
     <div><span>后台刷新</span><strong>${escapeHtml(syncStatusText)}</strong></div>
-    <div><span>Vercel 云库</span><strong>${escapeHtml(cloudDbStatusText)}</strong></div>
+    <div><span>云同步</span><strong>${escapeHtml(provider)} · ${escapeHtml(cloudDbStatusText)}</strong></div>
     <div><span>本地草稿</span><strong>${recordCount} 条 · ${escapeHtml(cachedAt)}</strong></div>
     <div><span>同步状态</span><strong>${escapeHtml(syncMode)}</strong></div>
   `;
 }
 function cloudDatabaseAvailable() {
-  return window.location.protocol !== "file:" && typeof fetch === "function";
+  return Boolean(cloudSyncEndpoint) || (window.location.protocol !== "file:" && typeof fetch === "function");
 }
 function cloudDataMetaText(meta) {
   if (!meta) return "";
@@ -878,7 +910,7 @@ function cloudDbPauseRemainingText() {
   return `${hours} 小时`;
 }
 function cloudDbQuotaMessage() {
-  return `云数据库流量额度已满，已暂停自动同步，本地草稿安全保留。请恢复 Neon/Vercel 额度后再同步。`;
+  return `云数据库额度已满或暂时不可用，已暂停自动同步，本地草稿安全保留。请恢复云同步服务后再同步。`;
 }
 function pauseCloudDbForQuota(error) {
   cloudDbQuotaPausedUntil = Date.now() + cloudDbQuotaPauseMs;
@@ -897,10 +929,10 @@ function setCloudDbStatus(message, meta) {
   renderSyncPanel();
 }
 async function callCloudData(action, payload = {}, token = appSessionPassword) {
-  if (!cloudDatabaseAvailable()) throw new Error("请通过 Vercel 或本地开发服务器打开网页，直接打开本地文件不能使用 Vercel 云同步。");
+  if (!cloudDatabaseAvailable()) throw new Error("请通过 Vercel、本地开发服务器打开网页，或填写 Cloudflare Worker 备用云同步地址。");
   const syncToken = String(token || appSessionPassword || "").trim();
   if (!syncToken) throw new Error("请先输入应用密码。");
-  const response = await fetch("/api/cloud-data", {
+  const response = await fetch(cloudApiUrl("/api/cloud-data"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -911,7 +943,7 @@ async function callCloudData(action, payload = {}, token = appSessionPassword) {
   const text = await response.text();
   const result = text ? JSON.parse(text) : {};
   if (!response.ok || result.ok === false) {
-    const error = new Error(result.error || `Vercel 云同步失败：${response.status}`);
+    const error = new Error(result.error || `${cloudSyncProviderLabel()}同步失败：${response.status}`);
     error.status = response.status;
     error.payload = result;
     throw error;
@@ -928,7 +960,7 @@ async function verifyAppPassword(password) {
       : { ok: false, error: "密码不正确" };
   }
   try {
-    const response = await fetch("/api/app-auth", {
+    const response = await fetch(cloudApiUrl("/api/app-auth"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: candidate })
@@ -955,9 +987,9 @@ async function refreshCloudDatabaseStatus(silent = false) {
   }
   if (!appSessionPassword) {
     try {
-      const response = await fetch("/api/cloud-data", { cache: "no-store" });
+      const response = await fetch(cloudApiUrl("/api/cloud-data"), { cache: "no-store" });
       const result = await response.json();
-      if (!result.configured) setCloudDbStatus("未配置 DATABASE_URL");
+      if (!result.configured) setCloudDbStatus(cloudSyncEndpoint ? "未配置 D1 数据库" : "未配置 DATABASE_URL");
       else if (!result.protected) setCloudDbStatus("未配置 TEAM_SYNC_TOKEN");
       else setCloudDbStatus("已配置，登录后自动同步");
     } catch {
@@ -976,7 +1008,7 @@ async function refreshCloudDatabaseStatus(silent = false) {
       return;
     }
     setCloudDbStatus(`连接失败：${error.message}`);
-    if (!silent) alert(`Vercel 云同步检查失败：${error.message}`);
+    if (!silent) alert(`${cloudSyncProviderLabel()}同步检查失败：${error.message}`);
   }
 }
 async function pullCloudDatabaseData({ silent = false, token = appSessionPassword, beforeUnlock = false } = {}) {
@@ -1001,7 +1033,7 @@ async function pullCloudDatabaseData({ silent = false, token = appSessionPasswor
     if (!beforeUnlock) preserveActiveDraft();
     const result = await callCloudData("pull", {}, syncToken);
     if (result.data) {
-      if (!silent) createBackup("Vercel 云库刷新前备份");
+      if (!silent) createBackup(`${cloudSyncProviderLabel()}刷新前备份`);
       data = mergeCloudData(result.data, data, "records");
       persistLocal();
       if (!data.members.includes(currentMember)) currentMember = data.members[0] || currentMember;
@@ -1011,7 +1043,7 @@ async function pullCloudDatabaseData({ silent = false, token = appSessionPasswor
       }
       clearCloudDbQuotaPause();
       cloudDbLastSeenSha = result.meta?.data_sha256 || cloudDbLastSeenSha;
-      setCloudDbStatus(`已读取 Vercel 云库 · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta || null);
+      setCloudDbStatus(`已读取${cloudSyncProviderLabel()} · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta || null);
       return { pulled: true, data };
     }
     clearCloudDbQuotaPause();
@@ -1020,7 +1052,7 @@ async function pullCloudDatabaseData({ silent = false, token = appSessionPasswor
   } catch (error) {
     if (isQuotaError(error)) return pauseCloudDbForQuota(error);
     setCloudDbStatus(`读取失败：${error.message}`);
-    if (!silent) alert(`Vercel 云同步读取失败：${error.message}`);
+    if (!silent) alert(`${cloudSyncProviderLabel()}读取失败：${error.message}`);
     return { pulled: false, reason: error.message };
   }
 }
@@ -1030,7 +1062,7 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
     return { written: false, reason: "not-available" };
   }
   if (!appSessionPassword) {
-    setCloudDbStatus("未登录，不能写入 Vercel 云库");
+    setCloudDbStatus(`未登录，不能写入${cloudSyncProviderLabel()}`);
     return { written: false, reason: "missing-token" };
   }
   if (isCloudDbQuotaPaused()) {
@@ -1045,12 +1077,12 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
     }
     clearCloudDbQuotaPause();
     cloudDbLastSeenSha = result.meta?.data_sha256 || cloudDbLastSeenSha;
-    setCloudDbStatus(`已写入 Vercel 云库 · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta || null);
+    setCloudDbStatus(`已写入${cloudSyncProviderLabel()} · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta || null);
     return { written: true, meta: result.meta || null };
   } catch (error) {
     if (isQuotaError(error)) return { written: false, ...pauseCloudDbForQuota(error) };
     setCloudDbStatus(`写入失败：${error.message}`);
-    if (!silent) alert(`Vercel 云同步写入失败：${error.message}`);
+    if (!silent) alert(`${cloudSyncProviderLabel()}写入失败：${error.message}`);
     return { written: false, reason: error.message };
   }
 }
@@ -1123,7 +1155,7 @@ async function restoreCloudHistory() {
   loadForm();
   render();
   await refreshCloudHistory(true);
-  showDialog("云端历史已恢复", "已经把团队数据恢复到选中的历史版本，并写回 Vercel 云库。", "");
+  showDialog("云端历史已恢复", `已经把团队数据恢复到选中的历史版本，并写回${cloudSyncProviderLabel()}。`, "");
 }
 function cloudBackupAvailable() {
   return window.location.protocol !== "file:" && typeof fetch === "function";
@@ -1963,11 +1995,11 @@ async function saveAndAudit() {
   render();
   if (!result?.written) {
     const message = result?.reason === "cloud-quota-paused"
-      ? "Vercel 云数据库流量额度已满，这次已保存到本机浏览器草稿。请先恢复 Neon/Vercel 额度，或选择团队共享文件夹作为临时备份后再重新提交。"
-      : "这次只保存到了本机浏览器缓存。请确认 Vercel 已配置 DATABASE_URL 和 TEAM_SYNC_TOKEN，或点击顶部“云端文件夹”选择团队共享文件夹后重新提交。";
+      ? "云数据库额度已满或暂时不可用，这次已保存到本机浏览器草稿。请先恢复云同步服务，或选择团队共享文件夹作为临时备份后再重新提交。"
+      : "这次只保存到了本机浏览器缓存。请确认云同步已配置应用密码，或点击顶部“云端文件夹”选择团队共享文件夹后重新提交。";
     showDialog("未同步到总数据", message, "");
   } else if (result.cloudDbWritten && !result.folderWritten) {
-    showDialog("已提交到 Vercel 云库", "记录已经写入 Vercel 云数据库，等待管理员人工审核。当前没有写入文件夹备份。", "");
+    showDialog(`已提交到${cloudSyncProviderLabel()}`, `记录已经写入${cloudSyncProviderLabel()}，等待管理员人工审核。当前没有写入文件夹备份。`, "");
   } else {
     showDialog("已提交", "记录已同步云端，等待管理员审核。", "");
   }
@@ -3092,6 +3124,7 @@ function closeDialog() {
 }
 async function unlockApp() {
   const password = $("appPasswordInput").value.trim();
+  saveCloudSyncEndpoint($("cloudSyncEndpointInput")?.value || cloudSyncEndpoint);
   $("lockHint").textContent = "正在验证应用密码...";
   const auth = await verifyAppPassword(password);
   if (!auth.ok) {
@@ -3108,6 +3141,14 @@ async function unlockApp() {
   startCloudDbPolling();
   loadForm();
   render();
+}
+function updateCloudSyncEndpointFromAdmin(clear = false) {
+  const next = clear ? "" : ($("cloudSyncEndpointAdminInput")?.value || "");
+  saveCloudSyncEndpoint(next);
+  cloudDbLastSeenSha = "";
+  cloudDbQuotaPausedUntil = 0;
+  refreshCloudDatabaseStatus(true);
+  showDialog(clear ? "备用云地址已清空" : "备用云地址已保存", clear ? "当前云同步会回到 Vercel 默认接口。" : `当前云同步会优先连接：${cloudSyncEndpoint}`, "");
 }
 async function chooseSharedFile() {
   if (desktopApp?.isDesktop) {
@@ -3403,17 +3444,17 @@ async function restoreCloudFromAdminCenter() {
   if (!adminUnlocked) return setView("admin");
   saveFormSilently();
   persistLocal();
-  if (!confirm("确定用管理员本地中心回灌 Vercel 云库？会与云端现有数据自动合并，并优先保留管理员本机配置。")) return;
+  if (!confirm(`确定用管理员本地中心回灌${cloudSyncProviderLabel()}？会与云端现有数据自动合并，并优先保留管理员本机配置。`)) return;
   const result = await saveCloudDatabaseData("admin", false);
   renderAdminCenterPanel();
   if (result?.written) {
     await refreshCloudHistory(true).catch(() => {});
-    showDialog("Vercel 云库已回灌", `已用管理员本地中心写回 Vercel，共 ${Object.keys(data.records || {}).length} 条记录。`, "");
+    showDialog("云同步已回灌", `已用管理员本地中心写回${cloudSyncProviderLabel()}，共 ${Object.keys(data.records || {}).length} 条记录。`, "");
     return;
   }
   const message = result?.reason === "cloud-quota-paused"
-    ? "Vercel/Neon 流量额度仍然满，管理员中心已经保留在本机和可选共享副本里。额度恢复后再点“中心回灌Vercel”。"
-    : "暂时无法写入 Vercel，请确认 DATABASE_URL 和 TEAM_SYNC_TOKEN 配置正常。管理员中心仍保存在本机。";
+    ? "云同步额度仍然满或暂时不可用，管理员中心已经保留在本机和可选共享副本里。服务恢复后再点“中心回灌Vercel”。"
+    : "暂时无法写入云同步，请确认同步地址和 TEAM_SYNC_TOKEN 配置正常。管理员中心仍保存在本机。";
   showDialog("暂时无法回灌", message, "");
 }
 async function clearSourceFolders() {
@@ -3809,13 +3850,13 @@ async function saveAdminConfig() {
   if (!result?.written) {
     $("adminSaveStatus").textContent = `配置只保存为本地草稿 · ${new Date().toLocaleString("zh-CN")}`;
     const message = result?.reason === "cloud-quota-paused"
-      ? "Vercel 云数据库流量额度已满，配置已先留在本机草稿。请恢复 Neon/Vercel 额度，或先选择团队共享文件夹作为临时备份。"
-      : "请确认 Vercel 云同步已配置，或选择团队共享的云端文件夹。未连接云端时，配置只会留在本机浏览器缓存里。";
+      ? "云数据库额度已满或暂时不可用，配置已先留在本机草稿。请恢复云同步服务，或先选择团队共享文件夹作为临时备份。"
+      : "请确认云同步已配置，或选择团队共享的云端文件夹。未连接云端时，配置只会留在本机浏览器缓存里。";
     showDialog("配置未同步", message, "");
     return;
   }
   $("adminSaveStatus").textContent = `配置已保存并同步 · ${new Date().toLocaleString("zh-CN")}`;
-  showDialog("配置已保存", result.cloudDbWritten ? "项目、定额和成员名单已经写入 Vercel 云数据库。其他成员同步后会自动更新。" : "项目、定额和成员名单已经写入共享数据。其他成员同步后会自动更新。", "");
+  showDialog("配置已保存", result.cloudDbWritten ? `项目、定额和成员名单已经写入${cloudSyncProviderLabel()}。其他成员同步后会自动更新。` : "项目、定额和成员名单已经写入共享数据。其他成员同步后会自动更新。", "");
 }
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (s) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s] || s));
@@ -3824,6 +3865,7 @@ function escapeAttr(value) {
   return escapeHtml(value).replace(/"/g, "&quot;");
 }
 function bindEvents() {
+  syncCloudEndpointInputs();
   $("dateInput").value = currentDate;
   $("dateInput").onchange = () => selectDate($("dateInput").value);
   $("overviewDateInput").onchange = () => {
@@ -4019,6 +4061,8 @@ function bindEvents() {
   $("clearSourceFoldersBtn").onclick = () => clearSourceFolders();
   $("chooseSummaryFolderBtn").onclick = () => chooseSummaryFolder().catch((err) => alert(`选择汇总失败：${err.message}`));
   $("syncSummaryFolderBtn").onclick = () => syncSummaryFolder().catch((err) => alert(`汇总失败：${err.message}`));
+  $("saveCloudEndpointBtn").onclick = () => updateCloudSyncEndpointFromAdmin(false);
+  $("clearCloudEndpointBtn").onclick = () => updateCloudSyncEndpointFromAdmin(true);
   $("mergeAdminCenterBtn").onclick = () => mergeToAdminCenter().catch((err) => alert(`合并失败：${err.message}`));
   $("writeAdminCenterFolderBtn").onclick = () => writeAdminCenterToSharedTargets().catch((err) => alert(`写入共享失败：${err.message}`));
   $("restoreCloudFromAdminCenterBtn").onclick = () => restoreCloudFromAdminCenter().catch((err) => alert(`回灌失败：${err.message}`));

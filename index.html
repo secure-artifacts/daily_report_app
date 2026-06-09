@@ -10,8 +10,12 @@
   <div class="lock-screen" id="lockScreen">
     <div class="lock-box">
       <h2>小组报数日记</h2>
-      <p>请输入 Vercel 环境变量中的应用密码</p>
+      <p>请输入应用密码；Vercel 满额时可填写备用云同步地址</p>
       <input id="appPasswordInput" type="password" placeholder="应用密码">
+      <label class="lock-endpoint">
+        <span>备用云同步地址</span>
+        <input id="cloudSyncEndpointInput" type="url" placeholder="Cloudflare Worker URL，可留空">
+      </label>
       <button class="primary" id="unlockBtn">进入</button>
       <small id="lockHint"></small>
     </div>
@@ -355,6 +359,11 @@
           <section class="panel">
             <div class="panel-head"><h2>同步与备份</h2><span class="hint" id="adminSaveStatus">本地自动保留 90 天</span></div>
             <div class="sync-status-grid" id="syncStatusBox"></div>
+            <div class="cloud-endpoint-row">
+              <input id="cloudSyncEndpointAdminInput" type="url" placeholder="备用云同步地址，例如 Cloudflare Worker URL">
+              <button id="saveCloudEndpointBtn">保存备用云地址</button>
+              <button id="clearCloudEndpointBtn">清空备用云地址</button>
+            </div>
             <div class="summary-folder-actions">
               <button id="openFileBtn" title="选择 Google Drive 本地同步文件夹">选择备用文件夹</button>
               <button id="sheetBackupBtn" title="生成可用 Google 表格打开的 CSV 备份">表格备份</button>

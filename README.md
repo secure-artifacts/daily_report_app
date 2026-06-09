@@ -41,6 +41,19 @@ Vercel 云同步会使用同一张最新状态表：
 
 选择同一个共享文件夹后，应用会额外维护 `daily_report_clients/*.json` 成员副本。每台电脑写自己的副本文件，管理员本地中心会扫描这些副本合并，避免多台电脑同时抢写同一个总文件。
 
+### 备用云：Cloudflare Worker + D1
+
+如果 Neon/Vercel 免费额度满了，可以部署 `cloudflare-worker.mjs` 作为第二云同步通道。前端登录页和管理员“同步与备份”里都可以填写 Worker 地址；留空则继续使用 Vercel 默认接口。
+
+1. 在 Cloudflare 创建一个 D1 数据库。
+2. 创建 Worker，把 `cloudflare-worker.mjs` 作为 Worker 代码；如果用 Wrangler，可以复制 `wrangler.toml.example` 为 `wrangler.toml` 后填写 D1 的 `database_id`。
+3. 给 Worker 绑定 D1，绑定名必须是 `DB`。
+4. 给 Worker 设置 Secret：`TEAM_SYNC_TOKEN`，也可以设置 `APP_PASSWORD`；值要和成员登录用的应用密码一致。
+5. 部署 Worker 后，复制 Worker URL，例如 `https://daily-report-sync.xxx.workers.dev`。
+6. 成员打开原来的 Vercel 页面，在登录页“备用云同步地址”里填写这个 Worker URL，再输入应用密码进入。
+
+Worker 提供 `/api/app-auth` 和 `/api/cloud-data`，会自动创建 `daily_report_cloud_state` 和 `daily_report_cloud_events` 两张 D1 表。管理员可以在 Vercel 和 Cloudflare 两个云之间切换地址，必要时用“中心回灌Vercel”或保存配置把本地中心写回当前选中的云同步通道。
+
 ## 云数据库备份（可选）
 
 这个功能用于管理员额外保留备份快照，不会把数据库口令写进代码仓库，也不会缓存在浏览器本地。
@@ -78,6 +91,7 @@ Vercel 云同步会使用同一张最新状态表：
 
 - 顶部同步状态里 “Vercel 云库” 是否显示“已写入 Vercel 云库”或“已读取 Vercel 云库”。
 - Vercel 是否配置了 `POSTGRES_URL` 或 `DATABASE_URL`，是否配置了 `TEAM_SYNC_TOKEN`，并且成员输入的应用密码是否等于 `TEAM_SYNC_TOKEN`。
+- 如果 Vercel/Neon 额度满了，先部署 Cloudflare Worker + D1，把 Worker URL 填到“备用云同步地址”，成员就能继续云端同步。
 - 如果没有配置 Vercel 云同步，再由管理员检查是否在后台选择了团队共享的 Google Drive 本地同步文件夹。
 - 如果 Vercel/Neon 提示流量额度满，先不要清浏览器缓存；管理员用“合并到管理员中心”和“中心写入共享”保底，额度恢复后再点“中心回灌Vercel”。
 - 管理员密码只解锁当前浏览器的管理员页面，不会把不同电脑变成同一份本地中心；跨电脑保底需要所有人选择同一个共享文件夹，或等待 Vercel 云同步恢复。
@@ -138,6 +152,7 @@ Vercel 云同步会使用同一张最新状态表：
 - 管理员本地中心可以合并来源副本、写入共享副本，并在 Vercel 恢复后回灌云库。
 - 同一个共享文件夹内的 `daily_report_clients` 目录是分布式成员副本目录，每台电脑独立写入，管理员合并时会一起读取。
 - 配置 `POSTGRES_URL` 或 `DATABASE_URL`，再配置 `TEAM_SYNC_TOKEN` 后，成员编辑记录会自动同步到 Vercel 云数据库，点击提交会立即同步。
+- 填写 Cloudflare Worker 备用云地址后，成员编辑记录会同步到 Cloudflare D1，不再经过 Vercel Postgres。
 - 配置 `CLOUD_BACKUP_TOKEN` 后，管理员可以把当前视图额外备份到云数据库，也可以从云备份恢复。
 - 云备份口令只保存在当前页面内存里，不写入 `localStorage`。
 - 汇总动作不会替换当前组文件夹数据，避免成员和组别被写回单个组文件夹后越积越乱。

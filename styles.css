@@ -76,6 +76,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--green); box-shad
 .lock-box h2, .lock-box p { margin: 0; }
 .lock-box p { color: var(--muted); font-weight: 800; }
 .lock-box small { color: var(--red); min-height: 18px; }
+.lock-endpoint { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 900; }
 .topbar {
   position: sticky;
   top: 0;
@@ -259,6 +260,7 @@ tr:last-child td { border-bottom: 0; }
 .sync-status-grid span { display: block; color: var(--muted); font-size: 12px; font-weight: 900; margin-bottom: 4px; }
 .sync-status-grid strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
 .summary-folder-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cloud-endpoint-row { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto; gap: 8px; align-items: center; }
 .summary-folder-box { display: grid; gap: 8px; }
 .summary-folder-line { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: #fbfcf8; padding: 9px 10px; }
 .summary-folder-line span { display: block; color: var(--muted); font-size: 12px; font-weight: 900; margin-bottom: 4px; }
@@ -376,6 +378,7 @@ tr:last-child td { border-bottom: 0; }
   .analysis-controls, .analysis-summary, .date-controls, .message-grid, .viz-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sync-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cloud-backup-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cloud-endpoint-row { grid-template-columns: 1fr; }
   .brand small { max-width: 86vw; }
 }
 @media (max-width: 580px) {
