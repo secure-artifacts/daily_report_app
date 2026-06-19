@@ -22,6 +22,7 @@
     { name: "美国时间", offset: "-05:00" },
     { name: "洛杉矶时间", offset: "-07:00" },
   ],
+  fbSpecialties: [],
   adminPassword: "",
   sheetBackupEnabled: true,
   backupCleanupEnabled: false,
@@ -77,6 +78,7 @@ let mixedExportMonths = [];
 let mixedExportYear = Number(monthKeyFromDateKey(todayLocalKey()).slice(0, 4));
 let mixedCheckinGroup = "";
 let mixedCheckinMember = "";
+let activeSpecialtyId = "";
 let checkinViewGroup = "";
 let checkinViewMember = "";
 let checkinViewRangeMode = "default";
@@ -237,6 +239,49 @@ function mergeMonthlyPlans(basePlans = {}, sourcePlans = {}) {
   });
   return merged;
 }
+function normalizeFbSpecialties(items = []) {
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    id: String(item.id || `fb_${Date.now()}_${Math.random().toString(16).slice(2)}`),
+    fbUrl: String(item.fbUrl || ""),
+    name: String(item.name || ""),
+    avatarUrl: String(item.avatarUrl || ""),
+    bannerUrl: String(item.bannerUrl || ""),
+    tier: String(item.tier || "测试专业"),
+    status: String(item.status || "观察"),
+    category: String(item.category || "逐个出字"),
+    videoOwner: String(item.videoOwner || ""),
+    operator: String(item.operator || ""),
+    notes: String(item.notes || ""),
+    reels: (Array.isArray(item.reels) ? item.reels : []).map((reel) => ({
+      id: String(reel.id || `reel_${Date.now()}_${Math.random().toString(16).slice(2)}`),
+      url: String(reel.url || ""),
+      title: String(reel.title || ""),
+      date: String(reel.date || ""),
+      views: reel.views === "" || reel.views === undefined || reel.views === null ? "" : Number(reel.views || 0),
+      interactions: reel.interactions === "" || reel.interactions === undefined || reel.interactions === null ? "" : Number(reel.interactions || 0),
+      result: String(reel.result || "观察"),
+      owner: String(reel.owner || ""),
+      notes: String(reel.notes || "")
+    }))
+  }));
+}
+function mergeFbSpecialties(baseItems = [], sourceItems = []) {
+  const map = new Map();
+  const put = (item) => {
+    const existing = map.get(item.id);
+    if (!existing) {
+      map.set(item.id, item);
+      return;
+    }
+    const reels = new Map();
+    (existing.reels || []).forEach((reel) => reels.set(reel.id, reel));
+    (item.reels || []).forEach((reel) => reels.set(reel.id, { ...(reels.get(reel.id) || {}), ...reel }));
+    map.set(item.id, { ...existing, ...item, reels: Array.from(reels.values()) });
+  };
+  normalizeFbSpecialties(baseItems).forEach(put);
+  normalizeFbSpecialties(sourceItems).forEach(put);
+  return Array.from(map.values());
+}
 function recordKeyParts(key = "") {
   const [date = "", ...memberParts] = String(key || "").split("|");
   return { date, member: memberParts.join("|") };
@@ -275,6 +320,7 @@ function normalize(source) {
   const memberQuotas = { ...(loaded.memberQuotas || {}) };
   const dailyQuotas = loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {};
   const monthlyPlans = normalizeMonthlyPlans(loaded.monthlyPlans || {});
+  const fbSpecialties = normalizeFbSpecialties(loaded.fbSpecialties || []);
   const checkinOptions = normalizeCheckinOptions([...(Array.isArray(loaded.checkinOptions) ? loaded.checkinOptions : []), ...defaultData.checkinOptions]);
   return {
     ...clone(defaultData),
@@ -291,6 +337,7 @@ function normalize(source) {
     memberQuotas,
     dailyQuotas,
     monthlyPlans,
+    fbSpecialties,
     checkinOptions,
     timezones: Array.isArray(loaded.timezones) && loaded.timezones.length
       ? loaded.timezones.map((item) => ({
@@ -498,6 +545,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberQuotas = clone(local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.monthlyPlans = mergeMonthlyPlans(remote.monthlyPlans, local.monthlyPlans);
+    merged.fbSpecialties = mergeFbSpecialties(remote.fbSpecialties, local.fbSpecialties);
     merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
     merged.adminPassword = String(local.adminPassword || "");
@@ -517,6 +565,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.monthlyPlans = mergeMonthlyPlans(local.monthlyPlans, remote.monthlyPlans);
+    merged.fbSpecialties = mergeFbSpecialties(local.fbSpecialties, remote.fbSpecialties);
     merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
     merged.adminPassword = String(remote.adminPassword || local.adminPassword || "");
@@ -548,6 +597,7 @@ function mergeSummaryData(baseSource, sourceData) {
     memberQuotas: { ...base.memberQuotas, ...source.memberQuotas },
     dailyQuotas: mergeDailyQuotas(base.dailyQuotas, source.dailyQuotas, "records"),
     monthlyPlans: mergeMonthlyPlans(base.monthlyPlans, source.monthlyPlans),
+    fbSpecialties: mergeFbSpecialties(base.fbSpecialties, source.fbSpecialties),
     checkinOptions: Array.from(new Set([...(base.checkinOptions || []), ...(source.checkinOptions || [])])),
     records: { ...base.records }
   });
@@ -571,6 +621,7 @@ function mergeAdminCenterData(baseSource, sourceData) {
     memberQuotas: { ...source.memberQuotas, ...base.memberQuotas },
     dailyQuotas: mergeDailyQuotas(source.dailyQuotas, base.dailyQuotas, "records"),
     monthlyPlans: mergeMonthlyPlans(source.monthlyPlans, base.monthlyPlans),
+    fbSpecialties: mergeFbSpecialties(source.fbSpecialties, base.fbSpecialties),
     checkinOptions: Array.from(new Set([...(base.checkinOptions || []), ...(source.checkinOptions || [])])),
     records: { ...base.records }
   });
@@ -589,6 +640,7 @@ function makeEmptySummary(seed = data) {
   empty.memberQuotas = {};
   empty.dailyQuotas = {};
   empty.monthlyPlans = {};
+  empty.fbSpecialties = [];
   empty.records = {};
   return empty;
 }
@@ -3786,6 +3838,171 @@ function collectAdminSettings() {
   if (!data.reviewMessages.pass.length) data.reviewMessages.pass = clone(defaultData.reviewMessages.pass);
   if (!data.reviewMessages.fail.length) data.reviewMessages.fail = clone(defaultData.reviewMessages.fail);
 }
+function specialtyTierOptions() {
+  return ["爆贴专业", "测试专业", "刚测能跑"];
+}
+function specialtyStatusOptions() {
+  return ["持续爆", "下滑", "持平", "观察", "暂停"];
+}
+function specialtyCategoryOptions() {
+  return ["逐个出字", "滚动字幕", "祷告词模板", "改贴图文", "其他"];
+}
+function activeSpecialty() {
+  const list = data.fbSpecialties || [];
+  if (!activeSpecialtyId && list.length) activeSpecialtyId = list[0].id;
+  return list.find((item) => item.id === activeSpecialtyId) || null;
+}
+function specialtyBadgeClass(value) {
+  if (/爆|持续/.test(value)) return "good";
+  if (/下滑|暂停/.test(value)) return "bad";
+  return "";
+}
+function renderSpecialties() {
+  if (!$("specialtyList")) return;
+  data.fbSpecialties = normalizeFbSpecialties(data.fbSpecialties || []);
+  const list = data.fbSpecialties;
+  if (!activeSpecialtyId && list.length) activeSpecialtyId = list[0].id;
+  if (activeSpecialtyId && !list.some((item) => item.id === activeSpecialtyId)) activeSpecialtyId = list[0]?.id || "";
+  const selected = activeSpecialty();
+  $("specialtyHint").textContent = `${list.length} 个专业 · ${selected ? selected.name || "未命名专业" : "请选择或新增"}`;
+  $("specialtyList").innerHTML = list.map((item) => `
+    <button class="specialty-card ${item.id === activeSpecialtyId ? "active" : ""}" type="button" data-specialty-id="${escapeAttr(item.id)}">
+      <span class="specialty-thumb">${item.avatarUrl ? `<img src="${escapeAttr(item.avatarUrl)}" alt="">` : "FB"}</span>
+      <span>
+        <strong>${escapeHtml(item.name || "未命名专业")}</strong>
+        <small>${escapeHtml(item.tier)} · ${escapeHtml(item.status)} · ${escapeHtml(item.category)}</small>
+      </span>
+    </button>
+  `).join("") || `<div class="hint">还没有专业，先新增一个。</div>`;
+  $("specialtyList").querySelectorAll("[data-specialty-id]").forEach((button) => {
+    button.onclick = () => {
+      activeSpecialtyId = button.dataset.specialtyId || "";
+      renderSpecialties();
+    };
+  });
+  renderSpecialtyEditor(selected);
+  renderSpecialtyReels(selected);
+}
+function renderSpecialtyEditor(item) {
+  const ids = ["specialtyFbUrl", "specialtyName", "specialtyAvatarUrl", "specialtyBannerUrl", "specialtyVideoOwner", "specialtyOperator", "specialtyTier", "specialtyStatus", "specialtyCategory", "specialtyNotes"];
+  ids.forEach((id) => { if ($(id)) $(id).disabled = !item; });
+  if (!item) {
+    ["specialtyFbUrl", "specialtyName", "specialtyAvatarUrl", "specialtyBannerUrl", "specialtyVideoOwner", "specialtyOperator", "specialtyNotes"].forEach((id) => { if ($(id)) $(id).value = ""; });
+    $("specialtyPreview").innerHTML = `<div class="hint">选择一个专业后查看资料。</div>`;
+    return;
+  }
+  $("specialtyFbUrl").value = item.fbUrl || "";
+  $("specialtyName").value = item.name || "";
+  $("specialtyAvatarUrl").value = item.avatarUrl || "";
+  $("specialtyBannerUrl").value = item.bannerUrl || "";
+  $("specialtyVideoOwner").value = item.videoOwner || "";
+  $("specialtyOperator").value = item.operator || "";
+  $("specialtyNotes").value = item.notes || "";
+  $("specialtyTier").innerHTML = specialtyTierOptions().map((option) => `<option ${item.tier === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("");
+  $("specialtyStatus").innerHTML = specialtyStatusOptions().map((option) => `<option ${item.status === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("");
+  $("specialtyCategory").innerHTML = specialtyCategoryOptions().map((option) => `<option ${item.category === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("");
+  $("specialtyPreview").innerHTML = `
+    <div class="specialty-banner" style="${item.bannerUrl ? `background-image:url('${escapeAttr(item.bannerUrl)}')` : ""}"></div>
+    <div class="specialty-preview-main">
+      <span class="specialty-avatar">${item.avatarUrl ? `<img src="${escapeAttr(item.avatarUrl)}" alt="">` : "FB"}</span>
+      <div>
+        <strong>${escapeHtml(item.name || "未命名专业")}</strong>
+        <small>${escapeHtml(item.fbUrl || "未填写链接")}</small>
+      </div>
+      <span class="specialty-pill ${specialtyBadgeClass(item.status)}">${escapeHtml(item.status)}</span>
+    </div>
+  `;
+}
+function saveActiveSpecialty() {
+  const item = activeSpecialty();
+  if (!item) return;
+  item.fbUrl = $("specialtyFbUrl").value.trim();
+  item.name = $("specialtyName").value.trim();
+  item.avatarUrl = $("specialtyAvatarUrl").value.trim();
+  item.bannerUrl = $("specialtyBannerUrl").value.trim();
+  item.videoOwner = $("specialtyVideoOwner").value.trim();
+  item.operator = $("specialtyOperator").value.trim();
+  item.tier = $("specialtyTier").value || "测试专业";
+  item.status = $("specialtyStatus").value || "观察";
+  item.category = $("specialtyCategory").value || "逐个出字";
+  item.notes = $("specialtyNotes").value.trim();
+  persistLocal();
+  scheduleSave("admin");
+  renderSpecialties();
+}
+function addSpecialty() {
+  const item = normalizeFbSpecialties([{ name: "新专业", tier: "测试专业", status: "观察", category: "逐个出字" }])[0];
+  data.fbSpecialties = normalizeFbSpecialties([...(data.fbSpecialties || []), item]);
+  activeSpecialtyId = item.id;
+  persistLocal();
+  scheduleSave("admin");
+  renderSpecialties();
+}
+function deleteActiveSpecialty() {
+  const item = activeSpecialty();
+  if (!item) return;
+  if (!confirm(`确定删除专业“${item.name || "未命名专业"}”？`)) return;
+  data.fbSpecialties = (data.fbSpecialties || []).filter((entry) => entry.id !== item.id);
+  activeSpecialtyId = data.fbSpecialties[0]?.id || "";
+  persistLocal();
+  scheduleSave("admin");
+  renderSpecialties();
+}
+function renderSpecialtyReels(item) {
+  const body = $("specialtyReelBody");
+  if (!body) return;
+  $("specialtyReelHint").textContent = item ? `${item.reels.length} 条视频 · ${item.name || "未命名专业"}` : "请选择专业";
+  if (!item) {
+    body.innerHTML = `<tr><td colspan="9" class="hint">请选择或新增一个专业。</td></tr>`;
+    return;
+  }
+  body.innerHTML = item.reels.map((reel) => `
+    <tr>
+      <td><input data-specialty-reel="${escapeAttr(reel.id)}" data-field="url" value="${escapeAttr(reel.url)}" placeholder="Reels链接"></td>
+      <td><input data-specialty-reel="${escapeAttr(reel.id)}" data-field="title" value="${escapeAttr(reel.title)}" placeholder="标题/钩子"></td>
+      <td><input data-specialty-reel="${escapeAttr(reel.id)}" data-field="date" type="date" value="${escapeAttr(reel.date)}"></td>
+      <td><input data-specialty-reel="${escapeAttr(reel.id)}" data-field="views" type="number" step="1" min="0" value="${reel.views === "" ? "" : Number(reel.views || 0)}"></td>
+      <td><input data-specialty-reel="${escapeAttr(reel.id)}" data-field="interactions" type="number" step="1" min="0" value="${reel.interactions === "" ? "" : Number(reel.interactions || 0)}"></td>
+      <td><select data-specialty-reel="${escapeAttr(reel.id)}" data-field="result">${["跑得好", "一般", "不好", "观察"].map((option) => `<option ${reel.result === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}</select></td>
+      <td><input data-specialty-reel="${escapeAttr(reel.id)}" data-field="owner" value="${escapeAttr(reel.owner)}" placeholder="负责人"></td>
+      <td><textarea data-specialty-reel="${escapeAttr(reel.id)}" data-field="notes" rows="2" placeholder="封面/钩子/节奏/素材复盘">${escapeHtml(reel.notes)}</textarea></td>
+      <td><button class="icon" type="button" data-remove-specialty-reel="${escapeAttr(reel.id)}" title="删除视频">×</button></td>
+    </tr>
+  `).join("") || `<tr><td colspan="9" class="hint">还没有视频，先新增一条。</td></tr>`;
+  body.querySelectorAll("[data-specialty-reel]").forEach((input) => {
+    input.onchange = () => updateSpecialtyReel(input);
+  });
+  body.querySelectorAll("[data-remove-specialty-reel]").forEach((button) => {
+    button.onclick = () => removeSpecialtyReel(button.dataset.removeSpecialtyReel || "");
+  });
+}
+function addSpecialtyReel() {
+  const item = activeSpecialty();
+  if (!item) return;
+  item.reels.push(normalizeFbSpecialties([{ reels: [{ result: "观察", owner: item.videoOwner || "" }] }])[0].reels[0]);
+  persistLocal();
+  scheduleSave("admin");
+  renderSpecialtyReels(item);
+}
+function updateSpecialtyReel(input) {
+  const item = activeSpecialty();
+  const reel = item?.reels.find((entry) => entry.id === input.dataset.specialtyReel);
+  if (!reel) return;
+  const field = input.dataset.field || "";
+  reel[field] = ["views", "interactions"].includes(field)
+    ? (input.value === "" ? "" : Number(input.value || 0))
+    : input.value.trim();
+  persistLocal();
+  scheduleSave("admin");
+}
+function removeSpecialtyReel(id) {
+  const item = activeSpecialty();
+  if (!item) return;
+  item.reels = item.reels.filter((reel) => reel.id !== id);
+  persistLocal();
+  scheduleSave("admin");
+  renderSpecialtyReels(item);
+}
 function render() {
   renderDateCalendars();
   renderMembers();
@@ -3802,6 +4019,7 @@ function render() {
   renderCloudBackupPanel();
   renderCloudHistoryPanel();
   renderTimezones();
+  renderSpecialties();
   renderSummaryFolders();
   renderAdminCenterPanel();
   renderReportSourceTabs();
@@ -5373,6 +5591,13 @@ function bindEvents() {
     renderTimezones();
     scheduleSave("admin");
   };
+  $("addSpecialtyBtn").onclick = addSpecialty;
+  $("deleteSpecialtyBtn").onclick = deleteActiveSpecialty;
+  $("saveSpecialtyBtn").onclick = saveActiveSpecialty;
+  $("addSpecialtyReelBtn").onclick = addSpecialtyReel;
+  ["specialtyFbUrl", "specialtyName", "specialtyAvatarUrl", "specialtyBannerUrl", "specialtyVideoOwner", "specialtyOperator", "specialtyTier", "specialtyStatus", "specialtyCategory", "specialtyNotes"].forEach((id) => {
+    $(id).onchange = saveActiveSpecialty;
+  });
   $("compactToggle").onchange = () => $("app").classList.toggle("compact", $("compactToggle").checked);
   $("openFileBtn").onclick = () => chooseSharedFile().catch((err) => alert(`打开失败：${err.message}`));
   $("sidebarToggle").onclick = () => {

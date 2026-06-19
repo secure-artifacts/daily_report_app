@@ -11,6 +11,7 @@ const defaultData = {
   memberQuotas: {},
   dailyQuotas: {},
   monthlyPlans: {},
+  fbSpecialties: [],
   checkinOptions: ["上线", "请假", "熬夜迟到"],
   adminPassword: "",
   sheetBackupEnabled: true,
@@ -126,6 +127,7 @@ function normalize(loaded = {}) {
     memberQuotas: loaded.memberQuotas && typeof loaded.memberQuotas === "object" ? clone(loaded.memberQuotas) : {},
     dailyQuotas: loaded.dailyQuotas && typeof loaded.dailyQuotas === "object" ? clone(loaded.dailyQuotas) : {},
     monthlyPlans: loaded.monthlyPlans && typeof loaded.monthlyPlans === "object" ? clone(loaded.monthlyPlans) : {},
+    fbSpecialties: normalizeFbSpecialties(loaded.fbSpecialties || []),
     checkinOptions: Array.isArray(loaded.checkinOptions) && loaded.checkinOptions.length ? loaded.checkinOptions.map(String) : clone(defaultData.checkinOptions),
     adminPassword: String(loaded.adminPassword || ""),
     records: normalizeRecordMap(loaded.records || {}, rules)
@@ -215,6 +217,51 @@ function mergeMonthlyPlans(remotePlans = {}, localPlans = {}, mode = "records") 
   return merged;
 }
 
+function normalizeFbSpecialties(items = []) {
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    id: String(item.id || `fb_${Date.now()}_${Math.random().toString(16).slice(2)}`),
+    fbUrl: String(item.fbUrl || ""),
+    name: String(item.name || ""),
+    avatarUrl: String(item.avatarUrl || ""),
+    bannerUrl: String(item.bannerUrl || ""),
+    tier: String(item.tier || "测试专业"),
+    status: String(item.status || "观察"),
+    category: String(item.category || "逐个出字"),
+    videoOwner: String(item.videoOwner || ""),
+    operator: String(item.operator || ""),
+    notes: String(item.notes || ""),
+    reels: (Array.isArray(item.reels) ? item.reels : []).map((reel) => ({
+      id: String(reel.id || `reel_${Date.now()}_${Math.random().toString(16).slice(2)}`),
+      url: String(reel.url || ""),
+      title: String(reel.title || ""),
+      date: String(reel.date || ""),
+      views: reel.views === "" || reel.views === undefined || reel.views === null ? "" : Number(reel.views || 0),
+      interactions: reel.interactions === "" || reel.interactions === undefined || reel.interactions === null ? "" : Number(reel.interactions || 0),
+      result: String(reel.result || "观察"),
+      owner: String(reel.owner || ""),
+      notes: String(reel.notes || "")
+    }))
+  }));
+}
+
+function mergeFbSpecialties(baseItems = [], sourceItems = []) {
+  const map = new Map();
+  const put = (item) => {
+    const existing = map.get(item.id);
+    if (!existing) {
+      map.set(item.id, item);
+      return;
+    }
+    const reels = new Map();
+    (existing.reels || []).forEach((reel) => reels.set(reel.id, reel));
+    (item.reels || []).forEach((reel) => reels.set(reel.id, { ...(reels.get(reel.id) || {}), ...reel }));
+    map.set(item.id, { ...existing, ...item, reels: Array.from(reels.values()) });
+  };
+  normalizeFbSpecialties(baseItems).forEach(put);
+  normalizeFbSpecialties(sourceItems).forEach(put);
+  return Array.from(map.values());
+}
+
 function clearActiveDeletedMembers(report) {
   const deleted = { ...(report.deletedMembers || {}) };
   (report.members || []).forEach((member) => {
@@ -239,6 +286,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberQuotas = clone(local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.monthlyPlans = mergeMonthlyPlans(remote.monthlyPlans, local.monthlyPlans, mode);
+    merged.fbSpecialties = mergeFbSpecialties(remote.fbSpecialties, local.fbSpecialties);
     merged.checkinOptions = clone(local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(local.quota || 0);
     merged.adminPassword = String(local.adminPassword || "");
@@ -253,6 +301,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.memberQuotas = clone(remote.memberQuotas || local.memberQuotas || {});
     merged.dailyQuotas = mergeDailyQuotas(remote.dailyQuotas, local.dailyQuotas, mode);
     merged.monthlyPlans = mergeMonthlyPlans(remote.monthlyPlans, local.monthlyPlans, mode);
+    merged.fbSpecialties = mergeFbSpecialties(local.fbSpecialties, remote.fbSpecialties);
     merged.checkinOptions = clone(remote.checkinOptions || local.checkinOptions || defaultData.checkinOptions);
     merged.quota = Number(remote.quota ?? local.quota ?? 0);
     merged.adminPassword = String(remote.adminPassword || local.adminPassword || "");

@@ -31,6 +31,7 @@
         <button class="tab" data-view="overview">整体预览</button>
         <button class="tab" data-view="timezones">时区管理</button>
         <button class="tab" data-view="mixed">混合表格</button>
+        <button class="tab" data-view="specialties">专业汇总</button>
         <button class="tab" data-view="admin">管理员</button>
       </nav>
       <div class="actions">
@@ -303,6 +304,82 @@
                 <thead id="mixedCheckinHead"></thead>
                 <tbody id="mixedCheckinBody"></tbody>
               </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" id="specialtiesView">
+          <section class="panel specialty-panel">
+            <div class="panel-head">
+              <h2>专业汇总</h2>
+              <div class="inline-actions">
+                <span class="hint" id="specialtyHint"></span>
+                <button id="addSpecialtyBtn" type="button">新增专业</button>
+                <button id="deleteSpecialtyBtn" type="button">删除专业</button>
+                <button id="saveSpecialtyBtn" type="button" class="primary">保存专业</button>
+              </div>
+            </div>
+            <div class="specialty-layout">
+              <div class="specialty-list" id="specialtyList"></div>
+              <div class="specialty-editor">
+                <div class="specialty-hero-preview" id="specialtyPreview"></div>
+                <div class="form-grid specialty-form">
+                  <label>FB链接</label><input id="specialtyFbUrl" type="url" placeholder="https://www.facebook.com/...">
+                  <label>专业名称</label><input id="specialtyName" placeholder="专业名称">
+                  <label>头像URL</label><input id="specialtyAvatarUrl" type="url" placeholder="图片链接">
+                  <label>Banner URL</label><input id="specialtyBannerUrl" type="url" placeholder="图片链接">
+                  <label>视频负责</label><input id="specialtyVideoOwner" placeholder="视频负责人员">
+                  <label>经营负责</label><input id="specialtyOperator" placeholder="专业经营人员">
+                  <label>分层标签</label>
+                  <select id="specialtyTier">
+                    <option>爆贴专业</option>
+                    <option>测试专业</option>
+                    <option>刚测能跑</option>
+                  </select>
+                  <label>状态标签</label>
+                  <select id="specialtyStatus">
+                    <option>持续爆</option>
+                    <option>下滑</option>
+                    <option>持平</option>
+                    <option>观察</option>
+                    <option>暂停</option>
+                  </select>
+                  <label>内容分类</label>
+                  <select id="specialtyCategory">
+                    <option>逐个出字</option>
+                    <option>滚动字幕</option>
+                    <option>祷告词模板</option>
+                    <option>改贴图文</option>
+                    <option>其他</option>
+                  </select>
+                  <label>专业批注</label><textarea id="specialtyNotes" placeholder="定位、素材方向、近期问题、下一步经营动作"></textarea>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Reels 单条分析</h2>
+              <div class="inline-actions">
+                <span class="hint" id="specialtyReelHint"></span>
+                <button id="addSpecialtyReelBtn" type="button">新增视频</button>
+              </div>
+            </div>
+            <div class="table-scroll">
+              <table class="specialty-reel-table">
+                <thead>
+                  <tr><th>链接</th><th>标题</th><th>日期</th><th>播放</th><th>互动</th><th>表现</th><th>负责人</th><th>分析批注</th><th></th></tr>
+                </thead>
+                <tbody id="specialtyReelBody"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>经营指引</h2><span class="hint">先手动沉淀，后续再接 API 自动回填</span></div>
+            <div class="specialty-guide-grid">
+              <div><strong>可自动化</strong><span>数据定时汇总、表现分层、下滑提醒、负责人看板、导出复盘。</span></div>
+              <div><strong>需手动/API</strong><span>FB名称、头像、banner、Reels指标需要 Meta API 权限或人工填写。</span></div>
+              <div><strong>经营动作</strong><span>爆贴专业保留模板并扩大产能；测试专业记录变量；下滑专业换钩子/封面/节奏。</span></div>
             </div>
           </section>
         </section>
