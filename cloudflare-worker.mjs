@@ -26,12 +26,53 @@ const defaultData = {
   records: {}
 };
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+const corsBaseHeaders = {
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type,X-Team-Token,X-App-Password",
   "Access-Control-Max-Age": "86400"
 };
+
+function normalizeAllowedOrigin(value) {
+  const text = String(value || "").trim().replace(/\/+$/, "");
+  if (!text) return "";
+  try {
+    return new URL(text).origin;
+  } catch {
+    return text;
+  }
+}
+
+function configuredAllowedOrigins(env = {}) {
+  return String(env.ALLOWED_ORIGINS || env.ALLOWED_ORIGIN || "")
+    .split(",")
+    .map(normalizeAllowedOrigin)
+    .filter(Boolean);
+}
+
+function isAllowedCorsOrigin(origin, env = {}) {
+  const normalized = normalizeAllowedOrigin(origin);
+  if (!normalized) return true;
+  if (configuredAllowedOrigins(env).includes(normalized)) return true;
+  if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalized)) return true;
+  if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) return true;
+  return false;
+}
+
+function corsHeadersFor(request, env = {}) {
+  const origin = request?.headers?.get("Origin") || "";
+  const headers = { ...corsBaseHeaders };
+  if (origin && isAllowedCorsOrigin(origin, env)) {
+    headers["Access-Control-Allow-Origin"] = normalizeAllowedOrigin(origin);
+    headers.Vary = "Origin";
+  }
+  return headers;
+}
+
+function withCors(response, request, env = {}) {
+  const headers = new Headers(response.headers);
+  Object.entries(corsHeadersFor(request, env)).forEach(([key, value]) => headers.set(key, value));
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -41,7 +82,6 @@ function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: {
-      ...corsHeaders,
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store"
     }
@@ -616,13 +656,19 @@ async function handleAppAuth(request, env) {
 export default {
   async fetch(request, env) {
     try {
-      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
+      if (request.method === "OPTIONS") {
+        const headers = corsHeadersFor(request, env);
+        const blocked = request.headers.get("Origin") && !headers["Access-Control-Allow-Origin"];
+        return new Response(null, { status: blocked ? 403 : 204, headers });
+      }
       const url = new URL(request.url);
-      if (url.pathname === "/api/cloud-data" || url.pathname === "/cloud-data") return handleCloudData(request, env);
-      if (url.pathname === "/api/app-auth" || url.pathname === "/app-auth") return handleAppAuth(request, env);
-      return json({ ok: true, service: "daily-report-cloudflare-sync" });
+      let response;
+      if (url.pathname === "/api/cloud-data" || url.pathname === "/cloud-data") response = await handleCloudData(request, env);
+      else if (url.pathname === "/api/app-auth" || url.pathname === "/app-auth") response = await handleAppAuth(request, env);
+      else response = json({ ok: true, service: "daily-report-cloudflare-sync" });
+      return withCors(response, request, env);
     } catch (error) {
-      return json({ ok: false, error: error.message || "Cloudflare 同步失败。" }, error.status || 500);
+      return withCors(json({ ok: false, error: error.message || "Cloudflare sync failed." }, error.status || 500), request, env);
     }
   }
 };

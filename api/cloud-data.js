@@ -90,7 +90,7 @@ function authTokens(extraTokens = []) {
 
 function hasValidToken(req, extraTokens = []) {
   const expected = authTokens(extraTokens);
-  const received = String(req.headers["x-team-token"] || req.headers["x-app-password"] || req.headers["x-backup-token"] || "");
+  const received = String(req.headers["x-team-token"] || req.headers["x-app-password"] || "");
   if (!expected.length || !received) return false;
   return expected.some((token) => {
     const left = Buffer.from(received);
@@ -646,7 +646,7 @@ async function restoreEvent(sql, eventId) {
 module.exports = async function handler(req, res) {
   try {
     if (req.method === "OPTIONS") return send(res, 204, {});
-    if (req.method === "GET" && !req.headers["x-team-token"] && !req.headers["x-app-password"] && !req.headers["x-backup-token"]) {
+    if (req.method === "GET" && !req.headers["x-team-token"] && !req.headers["x-app-password"]) {
       return send(res, 200, {
         ok: true,
         configured: Boolean(database()),
