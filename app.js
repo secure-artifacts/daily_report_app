@@ -170,9 +170,22 @@ async function loadCloudSyncConfig() {
 function cloudSyncProviderLabel() {
   return cloudSyncEndpoint ? "Cloudflare Worker" : "Vercel 云库";
 }
+function shouldUseCloudflareSyncProxy() {
+  const host = window.location.hostname;
+  return Boolean(
+    cloudSyncEndpoint &&
+    cloudSyncEndpointFromEnv &&
+    cloudSyncEndpoint === cloudSyncEndpointFromEnv &&
+    window.location.protocol !== "file:" &&
+    host !== "localhost" &&
+    host !== "127.0.0.1"
+  );
+}
 function cloudApiUrl(path) {
   const nextPath = path.startsWith("/") ? path : `/${path}`;
-  return cloudSyncEndpoint ? `${cloudSyncEndpoint}${nextPath}` : nextPath;
+  if (!cloudSyncEndpoint) return nextPath;
+  if (shouldUseCloudflareSyncProxy()) return `/api/cloudflare-sync?path=${encodeURIComponent(nextPath)}`;
+  return `${cloudSyncEndpoint}${nextPath}`;
 }
 function defaultCloudApiUrl(path) {
   return path.startsWith("/") ? path : `/${path}`;
