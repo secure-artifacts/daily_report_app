@@ -89,6 +89,7 @@ let saveTimer = 0;
 let draftTimer = 0;
 let recordCloudSaveTimer = 0;
 let freeTableSaveTimer = 0;
+let pendingCloudRecordKeys = new Set();
 let adminUnlocked = false;
 let showAllEntryItems = false;
 let appUnlocked = false;
@@ -111,6 +112,41 @@ function fmtTotal(value) {
 function signedTotalText(value) {
   const cleaned = cleanTotalValue(value);
   return `${cleaned >= 0 ? "+" : ""}${fmt(cleaned)}`;
+}
+function markPendingCloudRecord(day = currentDate, member = currentMember) {
+  const nextDay = String(day || "").trim();
+  const nextMember = String(member || "").trim();
+  if (nextDay && nextMember) pendingCloudRecordKeys.add(nextDay + "|" + nextMember);
+}
+function compactCloudSyncData(mode = "records") {
+  if (mode !== "records") return normalize(data);
+  const keys = new Set(pendingCloudRecordKeys);
+  if (currentDate && currentMember) keys.add(currentDate + "|" + currentMember);
+  const records = {};
+  const dailyQuotas = {};
+  keys.forEach((key) => {
+    const record = data.records?.[key];
+    if (!record) return;
+    records[key] = clone(record);
+    if (record.date && data.dailyQuotas?.[record.date]) dailyQuotas[record.date] = clone(data.dailyQuotas[record.date]);
+  });
+  if (!Object.keys(records).length) return normalize(data);
+  return normalize({
+    version: data.version,
+    updated_at: data.updated_at,
+    quota: data.quota,
+    rules: data.rules,
+    productRules: data.productRules,
+    members: data.members,
+    groups: data.groups,
+    memberGroups: data.memberGroups,
+    groupItems: data.groupItems,
+    memberItems: data.memberItems,
+    memberQuotas: data.memberQuotas,
+    dailyQuotas,
+    checkinOptions: data.checkinOptions,
+    records
+  });
 }
 function styledTotalCell(value, style) {
   return styledCell(cleanTotalValue(value), style);
@@ -1329,13 +1365,15 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
     return { written: false, reason: "cloud-quota-paused" };
   }
   try {
-    const result = await callCloudData("save", { data: normalize(data), mode, actor: currentMember }, appSessionPassword);
+    const payloadData = compactCloudSyncData(mode);
+    const result = await callCloudData("save", { data: payloadData, mode, actor: currentMember }, appSessionPassword);
     if (result.data) {
       data = mergeCloudData(result.data, data, "records");
       persistLocal();
     }
     clearCloudDbQuotaPause();
     cloudDbLastSeenSha = result.meta?.data_sha256 || cloudDbLastSeenSha;
+    if (mode === "records") pendingCloudRecordKeys.clear();
     setCloudDbStatus(`已写入${cloudSyncProviderLabel()} · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta || null);
     return { written: true, meta: result.meta || null };
   } catch (error) {
@@ -2362,6 +2400,7 @@ function saveFormSilently() {
   if (!recordContentChanged(rec, nextRecord)) return { rec, autoStatus, changed: false };
   Object.assign(rec, nextRecord);
   persistLocal();
+  markPendingCloudRecord(currentDate, currentMember);
   scheduleRecordCloudSave();
   return { rec, autoStatus, changed: true };
 }
@@ -3607,6 +3646,7 @@ function bindMixedCheckinTableEdits() {
 }
 function persistMixedEdit(day, member) {
   persistLocal();
+  markPendingCloudRecord(day, member);
   scheduleRecordCloudSave();
   if (day === currentDate && member === currentMember) loadForm();
   renderOverview();
@@ -5837,6 +5877,7 @@ function bindEvents() {
       rec.harvest = $("dialogText").value.trim();
       $("harvestText").value = rec.harvest;
     }
+    markPendingCloudRecord(currentDate, currentMember);
     persistEverywhere();
     renderHistory();
     closeDialog();
