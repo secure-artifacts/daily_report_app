@@ -110,6 +110,8 @@ let lastTypingAt = 0;
 let sharedReplicaCount = 0;
 let cloudSyncEndpoint = loadCloudSyncEndpoint();
 let cloudSyncEndpointFromEnv = "";
+let cloudSyncConfigLoaded = false;
+let cloudSyncConfigLoading = null;
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
 function cleanTotalValue(value) {
@@ -224,19 +226,40 @@ function saveCloudSyncEndpoint(value) {
 }
 function setCloudSyncEndpointFromEnv(value) {
   cloudSyncEndpointFromEnv = normalizeCloudSyncEndpoint(value);
-  if (!loadCloudSyncEndpoint()) cloudSyncEndpoint = cloudSyncEndpointFromEnv;
+  if (!loadCloudSyncEndpoint()) {
+    cloudSyncEndpoint = cloudSyncEndpointFromEnv;
+    if (cloudSyncEndpointFromEnv) localStorage.setItem("dailyReportCloudSyncEndpoint", cloudSyncEndpointFromEnv);
+  }
   syncCloudEndpointInputs();
   renderSyncPanel();
 }
-async function loadCloudSyncConfig() {
-  if (window.location.protocol === "file:" || typeof fetch !== "function") return;
+async function loadCloudSyncConfig({ force = false } = {}) {
+  if (window.location.protocol === "file:" || typeof fetch !== "function") return cloudSyncEndpointFromEnv;
+  if (!force && cloudSyncConfigLoaded) return cloudSyncEndpointFromEnv;
+  if (!force && cloudSyncConfigLoading) return cloudSyncConfigLoading;
+  cloudSyncConfigLoading = (async () => {
+    try {
+      const response = await fetch("/api/sync-config", { cache: "no-store" });
+      const result = await response.json();
+      if (response.ok && result.ok) {
+        setCloudSyncEndpointFromEnv(result.endpoint || "");
+        cloudSyncConfigLoaded = true;
+      }
+    } catch {
+      // Vercel/local config endpoint is optional; manual endpoint entry still works.
+    }
+    return cloudSyncEndpointFromEnv;
+  })();
   try {
-    const response = await fetch("/api/sync-config", { cache: "no-store" });
-    const result = await response.json();
-    if (response.ok && result.ok) setCloudSyncEndpointFromEnv(result.endpoint || "");
-  } catch {
-    // Vercel/local config endpoint is optional; manual endpoint entry still works.
+    return await cloudSyncConfigLoading;
+  } finally {
+    cloudSyncConfigLoading = null;
   }
+}
+async function ensureCloudSyncConfig() {
+  if (cloudSyncEndpoint || cloudSyncEndpointFromEnv) return cloudSyncEndpoint;
+  await loadCloudSyncConfig({ force: !cloudSyncConfigLoaded });
+  return cloudSyncEndpoint;
 }
 function cloudSyncProviderLabel() {
   return cloudSyncEndpoint ? "Cloudflare Worker" : "Vercel 云库";
@@ -1371,6 +1394,7 @@ function setCloudDbStatus(message, meta) {
   renderSyncPanel();
 }
 async function callCloudData(action, payload = {}, token = appSessionPassword) {
+  await ensureCloudSyncConfig();
   if (!cloudDatabaseAvailable()) throw new Error("请通过 Vercel、本地开发服务器打开网页，或填写 Cloudflare Worker 备用云同步地址。");
   const syncToken = String(token || appSessionPassword || "").trim();
   if (!syncToken) throw new Error("请先输入应用密码。");
@@ -1403,6 +1427,7 @@ async function callCloudData(action, payload = {}, token = appSessionPassword) {
   return result;
 }
 async function verifyAppPassword(password) {
+  await ensureCloudSyncConfig();
   const candidate = String(password || "").trim();
   if (!candidate) return { ok: false, error: "请输入应用密码" };
   if (!cloudDatabaseAvailable()) {
@@ -1446,6 +1471,7 @@ async function verifyAppPassword(password) {
   return { ok: false, error: "密码不正确" };
 }
 async function refreshCloudDatabaseStatus(silent = false) {
+  await ensureCloudSyncConfig();
   if (!cloudDatabaseAvailable()) {
     setCloudDbStatus("本地文件打开不可用");
     return;
@@ -1482,6 +1508,7 @@ async function refreshCloudDatabaseStatus(silent = false) {
   }
 }
 async function pullCloudDatabaseData({ silent = false, token = appSessionPassword, beforeUnlock = false } = {}) {
+  await ensureCloudSyncConfig();
   if (!cloudDatabaseAvailable()) {
     setCloudDbStatus("本地文件打开不可用");
     return { pulled: false, reason: "not-available" };
@@ -1527,6 +1554,7 @@ async function pullCloudDatabaseData({ silent = false, token = appSessionPasswor
   }
 }
 async function saveCloudDatabaseData(mode = "records", silent = false) {
+  await ensureCloudSyncConfig();
   if (!cloudDatabaseAvailable()) {
     setCloudDbStatus("本地文件打开不可用");
     return { written: false, reason: "not-available" };
@@ -1559,6 +1587,7 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
   }
 }
 async function syncCloudDatabaseIfChanged({ silent = true } = {}) {
+  await ensureCloudSyncConfig();
   if (!cloudDatabaseAvailable() || !appSessionPassword) return { pulled: false, reason: "not-ready" };
   if (isCloudDbQuotaPaused()) {
     setCloudDbStatus(cloudDbQuotaMessage(), cloudDbLastMeta);
