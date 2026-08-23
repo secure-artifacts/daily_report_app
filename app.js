@@ -6181,8 +6181,6 @@ function buildMixedSummaryText() {
   const report = selectedReportData();
   return withReportData(report, () => {
     const periods = mixedTableExportPeriods(report);
-    const start = periods[periods.length - 1]?.start || currentDate;
-    const end = periods[0]?.end || currentDate;
     const days = periods.flatMap((period) => period.days || []);
     const group = $('mixedTableGroup')?.value || mixedTableGroup || report.groups?.[0] || '';
     const members = membersForGroupValue(group, report);
@@ -6190,23 +6188,14 @@ function buildMixedSummaryText() {
     if (!member) return '';
     const itemNames = groupVisibleItems(group, report);
     const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
-    let totalWeighted = 0;
     let totalQuota = 0;
-    let totalCompleteQuota = 0;
-    let totalDutyHours = 0;
-    let totalWorkloadQuota = 0;
     let totalVideoProduct = 0;
     let totalAiProduct = 0;
     days.forEach((day) => {
       const rec = recordForReport(report, day, member);
       const items = rec?.items || {};
-      const totals = totalsForItems(items, itemNames, report);
       const products = productTotalsForItems(items, itemNames, report);
-      totalWeighted += totals.weighted;
-      totalWorkloadQuota += memberWorkloadQuota(member, day);
       totalQuota += memberQuota(member, day);
-      totalCompleteQuota += memberCompleteQuota(member, day);
-      totalDutyHours += dutyHoursValue(rec);
       totalVideoProduct += products.video;
       totalAiProduct += products.ai;
       itemNames.forEach((name) => {
@@ -6215,28 +6204,17 @@ function buildMixedSummaryText() {
     });
     const totalProduct = productTotalValue({ video: totalVideoProduct, ai: totalAiProduct });
     const diff = totalProduct - totalQuota;
-    const completeDiff = totalProduct - totalCompleteQuota;
-    const workloadDiff = totalWeighted - totalWorkloadQuota;
-    const status = quotaStatusFromTotals(totalProduct, totalQuota, totalCompleteQuota);
+    const status = cleanTotalValue(diff) >= 0 ? "达标" : "未达标";
     const detail = Object.entries(itemTotals)
       .filter(([, amount]) => cleanTotalValue(amount) !== 0)
       .map(([name, amount]) => `${name}：${fmtTotal(amount)}`)
       .join('，') || '暂无项目明细';
     return [
-      `${group} · ${member}`,
-      `时间：${start} 至 ${end}`,
-      `成品量：${fmtTotal(totalProduct)}`,
-      `一级定额：${fmtTotal(totalQuota)}`,
-      `完全定额：${fmtTotal(totalCompleteQuota)}`,
-      `换算工作量：${fmtTotal(totalWeighted)}`,
-      `工作量定额：${fmtTotal(totalWorkloadQuota)}`,
-      `工作量差额：${totalWorkloadQuota ? signedTotalText(workloadDiff) : "未设置"}`,
-      `尽本分时长：${fmtDutyHours(totalDutyHours)}`,
-      `视频成品：${fmtTotal(totalVideoProduct)}`,
-      `AI成品：${fmtTotal(totalAiProduct)}`,
-      `一级差额：${signedTotalText(diff)}`,
-      `完全差额：${signedTotalText(completeDiff)}`,
+      `视频成品：${fmtTotal(totalProduct)}`,
+      `定额：${fmtTotal(totalQuota)}`,
+      `差额：${signedTotalText(diff)}`,
       `状态：${status}`,
+      `辅助AI成品：${fmtTotal(totalAiProduct)}`,
       `项目明细：${detail}`
     ].join('\n');
   });
