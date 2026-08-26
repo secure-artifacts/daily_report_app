@@ -590,6 +590,7 @@ function createBackup(label = "自动备份") {
   writeBackups(backups.slice(0, 80));
 }
 function persistLocal() {
+  mergedSourceDataset = null;
   data.updated_at = new Date().toISOString();
   localStorage.setItem("dailyReportData", JSON.stringify(data));
   pruneBackups();
@@ -1299,7 +1300,7 @@ function withReportData(nextData, callback) {
 }
 function selectedReportData() {
   if (!superAdminUnlocked) return data;
-  if (activeReportSource === "all") return mergedSourceDataset || buildMergedSourceDataset();
+  if (activeReportSource === "all") return buildMergedSourceDataset();
   const match = activeReportSource.match(/^source:(\d+)$/);
   if (match) return sourceDatasets[Number(match[1])]?.data || data;
   return data;
@@ -5459,7 +5460,67 @@ function render() {
   if ($("workloadQuotaInput")) $("workloadQuotaInput").value = data.workloadQuota === "" || data.workloadQuota === undefined || data.workloadQuota === null ? "" : String(data.workloadQuota);
   preview();
 }
+function flushEntryDraftToRecords() {
+  window.clearTimeout(draftTimer);
+  if (!appUnlocked || !$("entryInputs") || !$("dateInput")) return null;
+  try {
+    return saveFormSilently();
+  } catch {
+    return null;
+  }
+}
+function ensureMixedRangeIncludesCurrentDate() {
+  const startInput = $("mixedTableStart");
+  const endInput = $("mixedTableEnd");
+  const start = startInput?.value || "";
+  const end = endInput?.value || "";
+  if (start && end && currentDate >= start && currentDate <= end) return;
+  mixedTableRangeMode = "week";
+  mixedExportMonths = [];
+  const range = weekRangeFor(currentDate);
+  if ($("mixedTableRangeMode")) $("mixedTableRangeMode").value = mixedTableRangeMode;
+  if (startInput) startInput.value = range.start;
+  if (endInput) endInput.value = range.end;
+}
+function prepareMixedTableFromCurrentEntry(options = {}) {
+  flushEntryDraftToRecords();
+  if (activeReportSource !== "current") {
+    activeReportSource = "current";
+    renderReportSourceTabs();
+  }
+  const group = data.memberGroups?.[currentMember] || data.groups?.[0] || "";
+  if (group) {
+    mixedTableGroup = group;
+    mixedCheckinGroup = group;
+  }
+  mixedTableMember = currentMember;
+  if (options.ensureRange) ensureMixedRangeIncludesCurrentDate();
+}
+async function syncTodayToMixedTable(event) {
+  const button = event?.currentTarget || $("syncTodayToMixedBtn");
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.textContent = "同步中...";
+    button.disabled = true;
+  }
+  prepareMixedTableFromCurrentEntry({ ensureRange: true });
+  renderMixedOverviewTable();
+  const result = await persistEverywhere("records").catch((error) => ({ written: false, error }));
+  renderMixedOverviewTable();
+  if (button) {
+    button.textContent = result?.written ? "已同步" : "已本地同步";
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = false;
+    }, 1200);
+  }
+  if (!result?.written) {
+    showDialog("已同步到混合表格", "今日面板已先写入本机记录并刷新混合表格；云端暂时没写成功，请看同步状态。", "");
+  }
+}
 function setView(view) {
+  const previousView = activeView;
+  if (previousView === "entry" && view !== "entry") flushEntryDraftToRecords();
   if (view === "admin" && !adminUnlocked) {
     const password = prompt("请输入管理员密码");
     const ok = (data.adminPassword && password === String(data.adminPassword)) || (appSessionPassword && password === appSessionPassword);
@@ -5469,11 +5530,13 @@ function setView(view) {
     }
     adminUnlocked = true;
   }
+  if (view === "mixed" && previousView === "entry") prepareMixedTableFromCurrentEntry({ ensureRange: true });
   activeView = view;
   document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
   document.querySelectorAll(".view").forEach((section) => section.classList.remove("active"));
   $(`${view}View`).classList.add("active");
-  renderOverview();
+  if (view === "mixed") renderMixedOverviewTable();
+  else renderOverview();
 }
 function showDialog(title, message, field) {
   pendingDialogField = field;
@@ -8282,6 +8345,7 @@ function bindEvents() {
   $("cloudHistoryRefreshBtn").onclick = () => refreshCloudHistory(false);
   $("cloudHistoryRestoreBtn").onclick = () => restoreCloudHistory().catch((err) => alert(`恢复云端历史失败：${err.message}`));
   $("exportBtn").onclick = exportData;
+  $("syncTodayToMixedBtn").onclick = syncTodayToMixedTable;
   $("copyMixedSummaryBtn").onclick = copyMixedSummaryText;
   $("copyMixedConversionDetailBtn").onclick = copyMixedConversionDetailText;
   $("exportMixedTableBtn").onclick = exportMixedTableWorkbook;
