@@ -250,7 +250,7 @@ tr:last-child td { border-bottom: 0; }
 .specialty-guide-grid div { display: grid; gap: 6px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcf8; padding: 11px 12px; }
 .specialty-guide-grid strong { color: var(--green); }
 .specialty-guide-grid span { color: var(--muted); font-size: 13px; font-weight: 900; line-height: 1.45; }
-.rule-row, .quota-row { display: grid; grid-template-columns: 24px minmax(120px, 1fr) 96px 96px 96px 38px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.rule-row, .quota-row { display: grid; grid-template-columns: 24px minmax(120px, 1fr) 96px 96px 96px 102px 38px; gap: 8px; align-items: center; margin-bottom: 8px; }
 .quota-row { grid-template-columns: minmax(120px, 1fr) 92px 92px 104px 92px 92px 104px minmax(140px, 1.1fr) 38px; }
 .config-head { color: var(--muted); font-size: 12px; font-weight: 900; padding: 0 8px; margin-bottom: 6px; }
 .quota-edit input { width: 100%; min-width: 120px; border: 0; background: transparent; font: inherit; font-weight: 900; color: inherit; outline: 0; }

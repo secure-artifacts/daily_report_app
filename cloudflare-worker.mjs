@@ -3,6 +3,7 @@ const defaultData = {
   updated_at: "",
   quota: 3,
   rules: { "视频": 1, "音频": 1, "字幕": 0.25, "图片": 0 },
+  totalConversionRules: {},
   members: ["成员A"],
   groups: ["1组"],
   memberGroups: { "成员A": "1组" },
@@ -191,6 +192,7 @@ function normalize(loaded = {}) {
     ...clone(defaultData),
     ...clone(loaded || {}),
     rules,
+    totalConversionRules: loaded.totalConversionRules && typeof loaded.totalConversionRules === "object" ? clone(loaded.totalConversionRules) : {},
     groups,
     members,
     memberGroups: loaded.memberGroups && typeof loaded.memberGroups === "object" ? clone(loaded.memberGroups) : {},
@@ -409,6 +411,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
   const recordKeys = new Set([...Object.keys(remote.records || {}), ...Object.keys(local.records || {})]);
   if (mode === "admin") {
     merged.rules = clone(local.rules);
+    merged.totalConversionRules = clone(local.totalConversionRules || {});
     merged.members = clone(local.members);
     merged.groups = clone(local.groups || []);
     merged.memberGroups = clone(local.memberGroups || {});
@@ -425,6 +428,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
     merged.deletedMembers = clone(local.deletedMembers || {});
   } else {
     merged.rules = clone(remote.rules || local.rules);
+    merged.totalConversionRules = clone(remote.totalConversionRules || local.totalConversionRules || {});
     merged.members = clone(remote.members || local.members);
     merged.groups = clone(remote.groups || local.groups || ["1组"]);
     merged.memberGroups = clone(remote.memberGroups || local.memberGroups || {});

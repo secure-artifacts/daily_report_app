@@ -4,6 +4,7 @@ const defaultData = {
   quota: 3,
   rules: { "视频": 1, "音频": 1, "字幕": 0.25, "图片": 0 },
   productRules: { "视频": { video: 1, ai: 0 }, "音频": { video: 0, ai: 0 }, "字幕": { video: 0, ai: 1 }, "图片": { video: 0, ai: 0 } },
+  totalConversionRules: {},
   members: ["成员A"],
   groups: ["1组"],
   memberGroups: { "成员A": "1组" },
@@ -167,6 +168,7 @@ function compactCloudSyncData(mode = "records") {
     completeQuota: data.completeQuota,
     rules: data.rules,
     productRules: data.productRules,
+    totalConversionRules: data.totalConversionRules,
     members: data.members,
     groups: data.groups,
     memberGroups: data.memberGroups,
@@ -315,6 +317,14 @@ function normalizeProductRules(rules = {}, productRules = {}) {
       video: Number(source.video ?? fallback.video ?? 0),
       ai: Number(source.ai ?? fallback.ai ?? 0)
     };
+  });
+  return normalized;
+}
+function normalizeTotalConversionRules(rules = {}, totalConversionRules = {}) {
+  const normalized = {};
+  Object.keys(rules || {}).forEach((name) => {
+    const value = Number(totalConversionRules?.[name] || 0);
+    normalized[name] = Number.isFinite(value) && value > 0 ? value : 0;
   });
   return normalized;
 }
@@ -472,6 +482,7 @@ function normalize(source) {
   const records = normalizeRecordMap(loaded.records || {}, rules);
   addRecordItemsToRules(records, rules, memberGroups, groups, groupItems);
   const productRules = normalizeProductRules(rules, loaded.productRules || defaultData.productRules);
+  const totalConversionRules = normalizeTotalConversionRules(rules, loaded.totalConversionRules || defaultData.totalConversionRules);
   groups.forEach((group) => {
     if (!Array.isArray(groupItems[group])) groupItems[group] = Object.keys(rules);
   });
@@ -499,6 +510,7 @@ function normalize(source) {
     workloadQuota: loaded.workloadQuota === "" || loaded.workloadQuota === undefined || loaded.workloadQuota === null ? "" : Number(loaded.workloadQuota || 0),
     rules,
     productRules,
+    totalConversionRules,
     members,
     groups,
     memberGroups,
@@ -767,6 +779,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
   if (mode === "admin") {
     merged.rules = clone(local.rules);
     merged.productRules = normalizeProductRules(local.rules, local.productRules || {});
+    merged.totalConversionRules = normalizeTotalConversionRules(local.rules, local.totalConversionRules || {});
     merged.members = clone(local.members);
     merged.groups = clone(local.groups || []);
     merged.memberGroups = clone(local.memberGroups || {});
@@ -798,6 +811,7 @@ function mergeCloudData(remoteSource, localSource, mode = "records") {
   } else {
     merged.rules = clone(remote.rules || local.rules);
     merged.productRules = normalizeProductRules(merged.rules, remote.productRules || local.productRules || {});
+    merged.totalConversionRules = normalizeTotalConversionRules(merged.rules, remote.totalConversionRules || local.totalConversionRules || {});
     merged.members = clone(remote.members || local.members);
     merged.groups = clone(remote.groups || local.groups || ["1组"]);
     merged.memberGroups = clone(remote.memberGroups || local.memberGroups || {});
@@ -841,6 +855,7 @@ function mergeSummaryData(baseSource, sourceData) {
     ...base,
     rules: { ...base.rules, ...source.rules },
     productRules: normalizeProductRules({ ...base.rules, ...source.rules }, { ...base.productRules, ...source.productRules }),
+    totalConversionRules: normalizeTotalConversionRules({ ...base.rules, ...source.rules }, { ...base.totalConversionRules, ...source.totalConversionRules }),
     members: Array.from(new Set([...base.members, ...source.members])),
     groups: Array.from(new Set([...base.groups, ...source.groups])),
     memberGroups: { ...base.memberGroups, ...source.memberGroups },
@@ -875,6 +890,7 @@ function mergeAdminCenterData(baseSource, sourceData) {
     ...base,
     rules: { ...source.rules, ...base.rules },
     productRules: normalizeProductRules({ ...source.rules, ...base.rules }, { ...source.productRules, ...base.productRules }),
+    totalConversionRules: normalizeTotalConversionRules({ ...source.rules, ...base.rules }, { ...source.totalConversionRules, ...base.totalConversionRules }),
     members: Array.from(new Set([...base.members, ...source.members])),
     groups: Array.from(new Set([...base.groups, ...source.groups])),
     memberGroups: { ...source.memberGroups, ...base.memberGroups },
@@ -2410,6 +2426,7 @@ function aggregatePeriod(days, scope, member) {
     let quota = 0;
     let workloadQuota = 0;
     let dutyHours = 0;
+    let totalConversion = 0;
     let video = 0;
     let ai = 0;
     members.forEach((name) => {
@@ -2417,7 +2434,9 @@ function aggregatePeriod(days, scope, member) {
       const memberItems = rec?.items || {};
       const totals = totalsForItems(memberItems, itemNames, report);
       const products = productTotalsForItems(memberItems, itemNames, report);
+      const conversions = totalConversionForItems(memberItems, itemNames, report);
       weighted += totals.weighted;
+      totalConversion += conversions.total;
       raw += totals.raw;
       video += products.video;
       ai += products.ai;
@@ -2429,9 +2448,11 @@ function aggregatePeriod(days, scope, member) {
       });
     });
     const productTotal = productTotalValue({ video, ai });
-    return { day, raw, weighted, quota, workloadQuota, workloadDiff: weighted - workloadQuota, dutyHours, video, ai, productTotal, diff: productTotal - quota };
+    return { day, raw, weighted, totalConversion, quota, workloadQuota, workloadDiff: weighted - workloadQuota, dutyHours, video, ai, productTotal, diff: productTotal - quota };
   });
   const weighted = daily.reduce((sum, row) => sum + row.weighted, 0);
+  const totalConversion = daily.reduce((sum, row) => sum + Number(row.totalConversion || 0), 0);
+  const totalConversionCapacityDays = days.length * Math.max(members.length, 1);
   const quota = daily.reduce((sum, row) => sum + row.quota, 0);
   const workloadQuota = daily.reduce((sum, row) => sum + Number(row.workloadQuota || 0), 0);
   const raw = daily.reduce((sum, row) => sum + row.raw, 0);
@@ -2439,7 +2460,7 @@ function aggregatePeriod(days, scope, member) {
   const video = daily.reduce((sum, row) => sum + Number(row.video || 0), 0);
   const ai = daily.reduce((sum, row) => sum + Number(row.ai || 0), 0);
   const productTotal = productTotalValue({ video, ai });
-  return { daily, raw, weighted, quota, workloadQuota, workloadDiff: weighted - workloadQuota, dutyHours, video, ai, productTotal, diff: productTotal - quota, itemTotals };
+  return { daily, raw, weighted, totalConversion, totalConversionCapacityDays, totalConversionSaturation: totalConversionSaturation(totalConversion, totalConversionCapacityDays), totalConversionStatus: totalConversionStatus(totalConversion, totalConversionCapacityDays), quota, workloadQuota, workloadDiff: weighted - workloadQuota, dutyHours, video, ai, productTotal, diff: productTotal - quota, itemTotals };
 }
 function renderMiniBars(containerId, rows, valueKey = "weighted") {
   const max = Math.max(...rows.map((row) => Math.abs(Number(row[valueKey] || 0))), 1);
@@ -2502,6 +2523,33 @@ function productTotalsForItems(items = {}, itemNames = configuredItems(), report
     totals.ai += amount * Number(rule.ai || 0);
     return totals;
   }, { video: 0, ai: 0 });
+}
+function totalConversionQuotaForItem(name, report = reportData()) {
+  const value = Number(report.totalConversionRules?.[name] || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+function totalConversionForItems(items = {}, itemNames = configuredItems(), report = reportData()) {
+  const byItem = {};
+  let total = 0;
+  itemNames.forEach((name) => {
+    const amount = Number(items[name] || 0);
+    const quota = totalConversionQuotaForItem(name, report);
+    const value = quota > 0 ? amount / quota : 0;
+    byItem[name] = value;
+    total += value;
+  });
+  return { total, items: byItem };
+}
+function totalConversionSaturation(totalConversion, capacityDays = 0) {
+  const capacity = Number(capacityDays || 0);
+  return capacity > 0 ? Number(totalConversion || 0) / capacity * 100 : 0;
+}
+function totalConversionStatus(totalConversion, capacityDays = 0) {
+  if (Number(capacityDays || 0) <= 0) return "未设置";
+  return totalConversionSaturation(totalConversion, capacityDays) >= 100 ? "饱和" : "未饱和";
+}
+function fmtTotalConversion(value) {
+  return fmt(Number(value || 0));
 }
 function productTotalValue(products = {}) {
   // AI 成品只作辅助参考，不参与成品量、差额和达标计算。
@@ -2938,6 +2986,7 @@ function deleteRules(names = []) {
   unique.forEach((name) => {
     delete data.rules[name];
     delete data.productRules?.[name];
+    delete data.totalConversionRules?.[name];
     Object.keys(data.groupItems || {}).forEach((group) => {
       data.groupItems[group] = (data.groupItems[group] || []).filter((item) => item !== name);
     });
@@ -2963,6 +3012,7 @@ function renderRules() {
       <span>换算工作量</span>
       <span>视频成品</span>
       <span>AI成品</span>
+      <span>总数日量</span>
       <span></span>
     </div>
   `;
@@ -2970,23 +3020,27 @@ function renderRules() {
     const row = document.createElement("div");
     row.className = "rule-row";
     const productRule = data.productRules?.[name] || defaultProductRuleFor(name);
+    const totalConversionQuota = totalConversionQuotaForItem(name, data);
     row.innerHTML = `
       <label class="member-row-check" title="勾选后可批量删除"><input type="checkbox" data-rule-select="${escapeAttr(name)}"></label>
       <input value="${escapeAttr(name)}" aria-label="项目">
       <input type="number" step="0.01" value="${Number(weight)}" aria-label="换算工作量系数" title="换算工作量系数">
       <input type="number" step="0.01" value="${Number(productRule.video || 0)}" aria-label="视频成品系数" title="视频成品系数">
       <input type="number" step="0.01" value="${Number(productRule.ai || 0)}" aria-label="AI成品系数" title="AI成品系数">
+      <input type="number" step="0.01" min="0" value="${totalConversionQuota || ""}" placeholder="如150" aria-label="总数换算日量" title="总数换算日量：数量除以这个值，得到需要几天">
       <button class="icon" title="删除">×</button>
     `;
     const inputs = row.querySelectorAll("input");
-    inputs[1].onchange = () => renameRule(name, inputs[1].value.trim(), Number(inputs[2].value), Number(inputs[3].value), Number(inputs[4].value));
-    [inputs[2], inputs[3], inputs[4]].forEach((input) => {
+    inputs[1].onchange = () => renameRule(name, inputs[1].value.trim(), Number(inputs[2].value), Number(inputs[3].value), Number(inputs[4].value), Number(inputs[5].value));
+    [inputs[2], inputs[3], inputs[4], inputs[5]].forEach((input) => {
       input.oninput = () => {
         data.rules[name] = Number(inputs[2].value || 0);
         data.productRules[name] = {
           video: Number(inputs[3].value || 0),
           ai: Number(inputs[4].value || 0)
         };
+        if (!data.totalConversionRules || typeof data.totalConversionRules !== "object") data.totalConversionRules = {};
+        data.totalConversionRules[name] = Number(inputs[5].value || 0);
         renderEntryInputs(readEntryInputs());
         preview();
         scheduleSave("admin");
@@ -3338,23 +3392,27 @@ function migrateRuleDataKeys(oldName, newName) {
   });
   return changed;
 }
-function renameRule(oldName, newName, weight, videoProduct, aiProduct) {
+function renameRule(oldName, newName, weight, videoProduct, aiProduct, totalConversionQuota) {
   const nextName = String(newName || "").trim();
   if (!nextName) return renderRules();
   if (!data.productRules || typeof data.productRules !== "object") data.productRules = {};
+  if (!data.totalConversionRules || typeof data.totalConversionRules !== "object") data.totalConversionRules = {};
   const previousWeight = Number(data.rules?.[oldName] ?? data.rules?.[nextName] ?? 1);
   const previousProduct = data.productRules?.[oldName] || data.productRules?.[nextName] || defaultProductRuleFor(nextName);
+  const previousTotalConversion = Number(data.totalConversionRules?.[oldName] ?? data.totalConversionRules?.[nextName] ?? 0);
   const isRename = oldName !== nextName;
   if (isRename) createBackup(`rename item ${oldName} before`);
   if (isRename) {
     delete data.rules[oldName];
     delete data.productRules?.[oldName];
+    delete data.totalConversionRules?.[oldName];
   }
   data.rules[nextName] = Number.isFinite(weight) ? weight : previousWeight;
   data.productRules[nextName] = {
     video: Number.isFinite(videoProduct) ? videoProduct : Number(previousProduct.video || 0),
     ai: Number.isFinite(aiProduct) ? aiProduct : Number(previousProduct.ai || 0)
   };
+  data.totalConversionRules[nextName] = Number.isFinite(totalConversionQuota) ? totalConversionQuota : previousTotalConversion;
   if (isRename) {
     Object.keys(data.memberItems || {}).forEach((member) => {
       data.memberItems[member] = renameItemInList(data.memberItems[member] || [], oldName, nextName);
@@ -3543,6 +3601,7 @@ function aggregateMemberRange(member, days, report, itemNames) {
   });
   const checkinSlots = days.length * checkinPeriods().length;
   const products = productTotalsForItems(items, itemNames, report);
+  const totalConversion = totalConversionForItems(items, itemNames, report).total;
   const productTotal = productTotalValue(products);
   const status = quotaStatusFromTotals(productTotal, quota, completeQuota);
   const rateBase = completeQuota || quota;
@@ -3555,6 +3614,10 @@ function aggregateMemberRange(member, days, report, itemNames) {
     raw,
     weighted,
     productTotal,
+    totalConversion,
+    totalConversionCapacityDays: days.length,
+    totalConversionSaturation: totalConversionSaturation(totalConversion, days.length),
+    totalConversionStatus: totalConversionStatus(totalConversion, days.length),
     quota,
     completeQuota,
     workloadQuota,
@@ -3616,6 +3679,7 @@ function mixedMonthlyMemberRow(member, info, itemNames, report) {
   const nextActual = aggregateRangeForMember(member, info.next, itemNames, report);
   const plan = mixedMonthlyPlanFor(report, info.mode, info.nextMonth, member, itemNames);
   const planTotals = totalsForItems(plan.items, itemNames, report);
+  const planConversion = totalConversionForItems(plan.items, itemNames, report).total;
   const planProducts = productTotalsForItems(plan.items, itemNames, report);
   const planProductTotal = productTotalValue(planProducts);
   const planQuotaValue = quotaValue(plan.quota);
@@ -3633,6 +3697,7 @@ function mixedMonthlyMemberRow(member, info, itemNames, report) {
       items: deltaItems,
       productTotal: current.productTotal - previous.productTotal,
       weighted: current.weighted - previous.weighted,
+      totalConversion: current.totalConversion - previous.totalConversion,
       video: current.video - previous.video,
       ai: current.ai - previous.ai
     },
@@ -3641,6 +3706,9 @@ function mixedMonthlyMemberRow(member, info, itemNames, report) {
       items: plan.items,
       productTotal: planProductTotal,
       weighted: planTotals.weighted,
+      totalConversion: planConversion,
+      totalConversionCapacityDays: nextActual.totalConversionCapacityDays,
+      totalConversionSaturation: totalConversionSaturation(planConversion, nextActual.totalConversionCapacityDays),
       video: planProducts.video,
       ai: planProducts.ai,
       quota: planQuota,
@@ -3658,10 +3726,15 @@ function sumMonthlyRows(rows, itemNames) {
     const ai = rows.reduce((sum, row) => sum + Number(row[field].ai || 0), 0);
     const productTotal = rows.reduce((sum, row) => sum + Number(row[field].productTotal || 0), 0);
     const quota = rows.reduce((sum, row) => sum + Number(row[field].quota || 0), 0);
+    const totalConversion = rows.reduce((sum, row) => sum + Number(row[field].totalConversion || 0), 0);
+    const totalConversionCapacityDays = rows.reduce((sum, row) => sum + Number(row[field].totalConversionCapacityDays || 0), 0);
     return {
       items,
       productTotal,
       weighted: rows.reduce((sum, row) => sum + Number(row[field].weighted || 0), 0),
+      totalConversion,
+      totalConversionCapacityDays,
+      totalConversionSaturation: totalConversionSaturation(totalConversion, totalConversionCapacityDays),
       quota,
       diff: productTotal - quota,
       video,
@@ -3680,6 +3753,7 @@ function sumMonthlyRows(rows, itemNames) {
       items: deltaItems,
       productTotal: rows.reduce((sum, row) => sum + Number(row.delta.productTotal || 0), 0),
       weighted: rows.reduce((sum, row) => sum + Number(row.delta.weighted || 0), 0),
+      totalConversion: rows.reduce((sum, row) => sum + Number(row.delta.totalConversion || 0), 0),
       video: rows.reduce((sum, row) => sum + Number(row.delta.video || 0), 0),
       ai: rows.reduce((sum, row) => sum + Number(row.delta.ai || 0), 0)
     },
@@ -3687,6 +3761,9 @@ function sumMonthlyRows(rows, itemNames) {
       items: planItems,
       productTotal: rows.reduce((sum, row) => sum + Number(row.plan.productTotal || 0), 0),
       weighted: rows.reduce((sum, row) => sum + Number(row.plan.weighted || 0), 0),
+      totalConversion: rows.reduce((sum, row) => sum + Number(row.plan.totalConversion || 0), 0),
+      totalConversionCapacityDays: rows.reduce((sum, row) => sum + Number(row.plan.totalConversionCapacityDays || 0), 0),
+      totalConversionSaturation: totalConversionSaturation(rows.reduce((sum, row) => sum + Number(row.plan.totalConversion || 0), 0), rows.reduce((sum, row) => sum + Number(row.plan.totalConversionCapacityDays || 0), 0)),
       video: rows.reduce((sum, row) => sum + Number(row.plan.video || 0), 0),
       ai: rows.reduce((sum, row) => sum + Number(row.plan.ai || 0), 0),
       quota: planQuota,
@@ -4328,9 +4405,9 @@ function signedText(value) {
 }
 function mixedMonthlyReportLabels(itemNames) {
   return {
-    actual: [...itemNames, "成品量", "视频成品", "AI成品", "换算工作量", "成品定额", "差额"],
-    delta: [...itemNames, "成品量差", "视频差", "AI差", "换算差"],
-    plan: [...itemNames, "计划成品量", "计划视频", "计划AI", "计划换算", "计划成品定额", "已成品", "进度", "计划差额"]
+    actual: [...itemNames, "成品量", "视频成品", "AI成品", "换算工作量", "总数换算量", "饱和度", "成品定额", "差额"],
+    delta: [...itemNames, "成品量差", "视频差", "AI差", "换算差", "总数换算差"],
+    plan: [...itemNames, "计划成品量", "计划视频", "计划AI", "计划换算", "计划总数换算", "计划饱和度", "计划成品定额", "已成品", "进度", "计划差额"]
   };
 }
 function mixedMonthlyActualCells(part, itemNames) {
@@ -4340,6 +4417,8 @@ function mixedMonthlyActualCells(part, itemNames) {
     `<td>${fmtTotal(part.video || 0)}</td>`,
     `<td>${fmtTotal(part.ai || 0)}</td>`,
     `<td>${fmtTotal(part.weighted || 0)}</td>`,
+    `<td>${fmtTotalConversion(part.totalConversion || 0)}</td>`,
+    `<td>${fmt(part.totalConversionSaturation || 0)}%</td>`,
     `<td>${fmtTotal(part.quota || 0)}</td>`,
     `<td class="${cleanTotalValue(part.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(part.diff || 0)}</td>`
   ].join("");
@@ -4353,7 +4432,8 @@ function mixedMonthlyDeltaCells(delta, itemNames) {
     `<td class="${cleanTotalValue(delta.productTotal || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${signedText(delta.productTotal || 0)}</td>`,
     `<td class="${cleanTotalValue(delta.video || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.video || 0)}</td>`,
     `<td class="${cleanTotalValue(delta.ai || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.ai || 0)}</td>`,
-    `<td class="${cleanTotalValue(delta.weighted || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.weighted || 0)}</td>`
+    `<td class="${cleanTotalValue(delta.weighted || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.weighted || 0)}</td>`,
+    `<td class="${Number(delta.totalConversion || 0) >= 0 ? "mixed-good-soft" : "mixed-bad"}">${signedText(delta.totalConversion || 0)}</td>`
   ].join("");
 }
 function mixedMonthlyPlanCells(row, itemNames, info, editable, isTotal = false) {
@@ -4376,6 +4456,8 @@ function mixedMonthlyPlanCells(row, itemNames, info, editable, isTotal = false) 
     `<td>${fmtTotal(plan.video || 0)}</td>`,
     `<td>${fmtTotal(plan.ai || 0)}</td>`,
     `<td>${fmtTotal(plan.weighted || 0)}</td>`,
+    `<td>${fmtTotalConversion(plan.totalConversion || 0)}</td>`,
+    `<td>${fmt(plan.totalConversionSaturation || 0)}%</td>`,
     quotaCell,
     `<td>${fmtTotal(plan.actual || 0)}</td>`,
     `<td class="${cleanTotalValue(plan.diff || 0) >= 0 ? "mixed-good" : "mixed-bad"}">${fmt(plan.rate || 0)}%</td>`,
@@ -4499,6 +4581,7 @@ function renderMixedOverviewTable() {
   const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
   let totalProduct = 0;
   let totalWeighted = 0;
+  let totalConversion = 0;
   let totalQuota = 0;
   let totalCompleteQuota = 0;
   let totalWorkloadQuota = 0;
@@ -4511,6 +4594,7 @@ function renderMixedOverviewTable() {
       <th>日期</th>
       ${itemNames.map((name) => `<th>${escapeHtml(name)}</th>`).join('')}
       <th>成品量</th>
+      <th>总数换算量</th>
       <th>一级定额</th>
       <th>完全定额</th>
       <th>换算工作量</th>
@@ -4523,7 +4607,7 @@ function renderMixedOverviewTable() {
     </tr>
   `;
   if (!member) {
-    $('mixedTableBody').innerHTML = `<tr><td colspan="${11 + itemNames.length}" class="hint">暂无可查看成员。</td></tr>`;
+    $('mixedTableBody').innerHTML = `<tr><td colspan="${12 + itemNames.length}" class="hint">暂无可查看成员。</td></tr>`;
     renderMixedMonthlyReport();
     renderMixedCheckinTable();
     return;
@@ -4533,6 +4617,7 @@ function renderMixedOverviewTable() {
     const items = rec?.items || {};
     const totals = totalsForItems(items, itemNames, report);
     const products = productTotalsForItems(items, itemNames, report);
+    const conversion = totalConversionForItems(items, itemNames, report).total;
     const productTotal = productTotalValue(products);
     const weighted = totals.weighted;
     const quota = memberQuota(member, day);
@@ -4541,6 +4626,7 @@ function renderMixedOverviewTable() {
     const dutyHours = dutyHoursValue(rec);
     totalProduct += productTotal;
     totalWeighted += weighted;
+    totalConversion += conversion;
     totalQuota += quota;
     totalCompleteQuota += completeQuota;
     totalWorkloadQuota += workloadQuota;
@@ -4561,6 +4647,7 @@ function renderMixedOverviewTable() {
           </td>`;
         }).join('')}
         <td class="mixed-total">${cleanTotalValue(productTotal) ? fmtTotal(productTotal) : ''}</td>
+        <td>${conversion ? fmtTotalConversion(conversion) : ''}</td>
         <td>${fmtTotal(quota)}</td>
         <td>${fmtTotal(completeQuota)}</td>
         <td>${cleanTotalValue(weighted) ? fmtTotal(weighted) : ''}</td>
@@ -4578,12 +4665,18 @@ function renderMixedOverviewTable() {
     `;
   });
   const totalDiff = totalProduct - totalQuota;
+  const totalSaturation = totalConversionSaturation(totalConversion, days.length);
+  const totalConversionLabel = totalConversion ? ` · 总数换算 ${fmtTotalConversion(totalConversion)}天 / 周期 ${days.length}天 · 饱和度 ${fmt(totalSaturation)}% · ${totalConversionStatus(totalConversion, days.length)}` : "";
   const totalStatus = quotaStatusFromTotals(totalProduct, totalQuota, totalCompleteQuota);
+  if (member) {
+    $('mixedTableHint').textContent = `${mixedTableGroup} · ${member} · ${start} 至 ${end} · ${itemNames.length} 个组项目 · 一级/完全定额 · 主看成品量${totalConversionLabel} · ${editable ? '可直接编辑' : '当前范围只读'}`;
+  }
   rows.unshift(`
     <tr class="mixed-summary-row">
       <th>合计</th>
       ${itemNames.map((name) => `<th>${fmtTotal(itemTotals[name])}</th>`).join('')}
       <th>${fmtTotal(totalProduct)}</th>
+      <th>${fmtTotalConversion(totalConversion)}</th>
       <th>${fmtTotal(totalQuota)}</th>
       <th>${fmtTotal(totalCompleteQuota)}</th>
       <th>${fmtTotal(totalWeighted)}</th>
@@ -6218,12 +6311,14 @@ function buildMixedSummaryText() {
     const itemNames = groupVisibleItems(group, report);
     const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
     let totalQuota = 0;
+    let totalConversion = 0;
     let totalVideoProduct = 0;
     let totalAiProduct = 0;
     days.forEach((day) => {
       const rec = recordForReport(report, day, member);
       const items = rec?.items || {};
       const products = productTotalsForItems(items, itemNames, report);
+      totalConversion += totalConversionForItems(items, itemNames, report).total;
       totalQuota += memberQuota(member, day);
       totalVideoProduct += products.video;
       totalAiProduct += products.ai;
@@ -6244,6 +6339,7 @@ function buildMixedSummaryText() {
       `差额：${signedTotalText(diff)}`,
       `状态：${status}`,
       `辅助AI成品：${fmtTotal(totalAiProduct)}`,
+      `总数换算量：${fmtTotalConversion(totalConversion)}天`,
       `项目明细：${detail}`
     ].join('\n');
   });
@@ -6307,6 +6403,8 @@ function mixedMonthlyActualStyledCells(part, itemNames) {
     styledTotalCell(part.video || 0, "sItem"),
     styledTotalCell(part.ai || 0, "sItem"),
     styledTotalCell(part.weighted || 0, "sTotal"),
+    styledCell(fmtTotalConversion(part.totalConversion || 0), "sTotal"),
+    styledCell(`${fmt(part.totalConversionSaturation || 0)}%`, (part.totalConversionSaturation || 0) >= 100 ? "sDiffGood" : "sItem"),
     styledTotalCell(part.quota || 0, "sQuota"),
     styledTotalCell(part.diff || 0, cleanTotalValue(part.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad")
   ];
@@ -6320,7 +6418,8 @@ function mixedMonthlyDeltaStyledCells(delta, itemNames) {
     styledTotalCell(delta.productTotal || 0, cleanTotalValue(delta.productTotal || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
     styledTotalCell(delta.video || 0, cleanTotalValue(delta.video || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
     styledTotalCell(delta.ai || 0, cleanTotalValue(delta.ai || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
-    styledTotalCell(delta.weighted || 0, cleanTotalValue(delta.weighted || 0) >= 0 ? "sDiffGood" : "sDiffBad")
+    styledTotalCell(delta.weighted || 0, cleanTotalValue(delta.weighted || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
+    styledCell(signedText(delta.totalConversion || 0), Number(delta.totalConversion || 0) >= 0 ? "sDiffGood" : "sDiffBad")
   ];
 }
 function mixedMonthlyPlanStyledCells(plan, itemNames) {
@@ -6330,6 +6429,8 @@ function mixedMonthlyPlanStyledCells(plan, itemNames) {
     styledTotalCell(plan.video || 0, "sItem"),
     styledTotalCell(plan.ai || 0, "sItem"),
     styledTotalCell(plan.weighted || 0, "sTotal"),
+    styledCell(fmtTotalConversion(plan.totalConversion || 0), "sTotal"),
+    styledCell(`${fmt(plan.totalConversionSaturation || 0)}%`, (plan.totalConversionSaturation || 0) >= 100 ? "sDiffGood" : "sItem"),
     styledTotalCell(plan.quota || 0, "sQuota"),
     styledTotalCell(plan.actual || 0, "sTotal"),
     styledCell(`${fmt(plan.rate || 0)}%`, cleanTotalValue(plan.diff || 0) >= 0 ? "sDiffGood" : "sDiffBad"),
@@ -6337,9 +6438,9 @@ function mixedMonthlyPlanStyledCells(plan, itemNames) {
   ];
 }
 function mixedMonthlyReportColumns(itemCount) {
-  const actual = [...Array.from({ length: itemCount }, () => 60), 68, 64, 64, 78, 72, 70];
-  const delta = [...Array.from({ length: itemCount }, () => 60), 76, 64, 64, 72];
-  const plan = [...Array.from({ length: itemCount }, () => 60), 82, 70, 70, 78, 82, 76, 58, 76];
+  const actual = [...Array.from({ length: itemCount }, () => 60), 68, 64, 64, 78, 82, 64, 72, 70];
+  const delta = [...Array.from({ length: itemCount }, () => 60), 76, 64, 64, 72, 82];
+  const plan = [...Array.from({ length: itemCount }, () => 60), 82, 70, 70, 78, 82, 64, 82, 76, 58, 76];
   return [72, ...actual, ...actual, ...delta, ...plan];
 }
 function mixedMonthlyReportExportBlock(group, report) {
@@ -8025,6 +8126,8 @@ function bindEvents() {
     const name = nextRuleName();
     data.rules[name] = 1;
     data.productRules[name] = defaultProductRuleFor(name);
+    if (!data.totalConversionRules || typeof data.totalConversionRules !== "object") data.totalConversionRules = {};
+    data.totalConversionRules[name] = 0;
     Object.keys(data.groupItems || {}).forEach((group) => {
       if (!Array.isArray(data.groupItems[group])) data.groupItems[group] = [];
       data.groupItems[group].push(name);

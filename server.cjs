@@ -14,6 +14,7 @@ const defaultData = {
   updated_at: "",
   quota: 3,
   rules: { "视频": 1, "音频": 1, "字幕": 0.25, "图片": 0 },
+  totalConversionRules: {},
   members: ["成员A"],
   groups: ["1组"],
   memberGroups: { "成员A": "1组" },
@@ -88,6 +89,7 @@ function normalize(source) {
   data.members = Array.isArray(data.members) && data.members.length ? data.members.map(String) : ["成员A"];
   data.groups = Array.isArray(data.groups) && data.groups.length ? data.groups.map(String) : ["1组"];
   data.rules = data.rules && typeof data.rules === "object" ? data.rules : clone(defaultData.rules);
+  data.totalConversionRules = data.totalConversionRules && typeof data.totalConversionRules === "object" ? data.totalConversionRules : {};
   data.memberGroups = data.memberGroups && typeof data.memberGroups === "object" ? data.memberGroups : {};
   data.memberSubgroups = data.memberSubgroups && typeof data.memberSubgroups === "object" ? data.memberSubgroups : {};
   data.groupItems = data.groupItems && typeof data.groupItems === "object" ? data.groupItems : {};
