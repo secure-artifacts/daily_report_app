@@ -6344,6 +6344,43 @@ function buildMixedSummaryText() {
     ].join('\n');
   });
 }
+function buildMixedConversionDetailText() {
+  const report = selectedReportData();
+  return withReportData(report, () => {
+    const periods = mixedTableExportPeriods(report);
+    const days = periods.flatMap((period) => period.days || []);
+    const group = $('mixedTableGroup')?.value || mixedTableGroup || report.groups?.[0] || '';
+    const members = membersForGroupValue(group, report);
+    const member = members.includes(mixedTableMember) ? mixedTableMember : members[0] || '';
+    if (!member) return '';
+    const itemNames = groupVisibleItems(group, report);
+    const itemTotals = Object.fromEntries(itemNames.map((name) => [name, 0]));
+    days.forEach((day) => {
+      const items = recordForReport(report, day, member)?.items || {};
+      itemNames.forEach((name) => {
+        itemTotals[name] += Number(items[name] || 0);
+      });
+    });
+    const rangeTextValue = periods
+      .map((period) => `${period.label || period.month || ''}${period.start && period.end ? ` ${period.start} 至 ${period.end}` : ''}`.trim())
+      .filter(Boolean)
+      .join('；') || `${days[days.length - 1] || ''} 至 ${days[0] || ''}`;
+    const detailLines = Object.entries(itemTotals)
+      .filter(([, amount]) => cleanTotalValue(amount) !== 0)
+      .map(([name, amount]) => {
+        const quota = totalConversionQuotaForItem(name, report);
+        if (quota <= 0) return `${name}：${fmtTotal(amount)} 除以 未设置总数日量 = 暂无法换算`;
+        return `${name}：${fmtTotal(amount)} 除以 ${fmtTotal(quota)} = ${fmtTotalConversion(amount / quota)}天`;
+      });
+    const totalConversion = totalConversionForItems(itemTotals, itemNames, report).total;
+    return [
+      `${group} · ${member} 总数换算细节`,
+      `范围：${rangeTextValue}`,
+      ...(detailLines.length ? detailLines : ['暂无项目数量。']),
+      `合计总数换算量：${fmtTotalConversion(totalConversion)}天`
+    ].join('\n');
+  });
+}
 function legacyCopyText(text) {
   const textarea = document.createElement("textarea");
   textarea.value = text;
@@ -6392,6 +6429,29 @@ async function copyMixedSummaryText(event) {
   }
   if (ok) {
     showDialog("已复制总数", "当前混合表格的总数和项目明细已复制到剪贴板。", "");
+  } else {
+    showDialog("复制失败", "浏览器没有允许写入剪贴板，请手动查看或导出表格。", "");
+  }
+}
+async function copyMixedConversionDetailText(event) {
+  const text = buildMixedConversionDetailText();
+  if (!text) return showDialog("暂无可复制内容", "请先选择小组和成员。", "");
+  const button = event?.currentTarget || $("copyMixedConversionDetailBtn");
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.textContent = "复制中...";
+    button.disabled = true;
+  }
+  const ok = await copyTextToClipboard(text);
+  if (button) {
+    button.textContent = ok ? "已复制" : originalText;
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = false;
+    }, 1200);
+  }
+  if (ok) {
+    showDialog("已复制换算细节", "每个项目的数量、总数日量和换算天数已复制到剪贴板。", "");
   } else {
     showDialog("复制失败", "浏览器没有允许写入剪贴板，请手动查看或导出表格。", "");
   }
@@ -8223,6 +8283,7 @@ function bindEvents() {
   $("cloudHistoryRestoreBtn").onclick = () => restoreCloudHistory().catch((err) => alert(`恢复云端历史失败：${err.message}`));
   $("exportBtn").onclick = exportData;
   $("copyMixedSummaryBtn").onclick = copyMixedSummaryText;
+  $("copyMixedConversionDetailBtn").onclick = copyMixedConversionDetailText;
   $("exportMixedTableBtn").onclick = exportMixedTableWorkbook;
   $("backupBtn").onclick = () => setView("admin");
   $("sheetBackupBtn").onclick = backupSheets;
