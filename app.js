@@ -47,6 +47,57 @@ const defaultData = {
   records: {}
 };
 const clone = (obj) => JSON.parse(JSON.stringify(obj));
+const localDataStorageKey = "dailyReportData";
+const localDataOverflowKey = "dailyReportDataOverflow";
+const localBackupStorageKey = "dailyReportBackups";
+const localDataSoftLimitChars = 3_000_000;
+const localBackupSoftLimitChars = 1_200_000;
+const localBackupMaxCount = 6;
+const indexedStoreName = "kv";
+let localStoragePressure = false;
+let localStorageStatusText = "正常";
+let indexedDbStatusText = "准备中";
+let indexedDbPersistTimer = 0;
+let indexedDbPersistChain = Promise.resolve();
+function noteLocalStoragePressure(message) {
+  localStoragePressure = true;
+  localStorageStatusText = message || "localStorage 已满，已启用大数据本机缓存";
+  try {
+    if (typeof renderSyncPanel === "function") renderSyncPanel();
+  } catch {}
+}
+function safeLocalStorageGet(key, fallback = "") {
+  try {
+    const value = localStorage.getItem(key);
+    return value === null ? fallback : value;
+  } catch (error) {
+    noteLocalStoragePressure(`浏览器缓存不可读：${error?.message || "未知错误"}`);
+    return fallback;
+  }
+}
+function safeLocalStorageSet(key, value, pressureMessage = "") {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (error) {
+    noteLocalStoragePressure(pressureMessage || `浏览器缓存写入失败：${error?.message || "空间不足"}`);
+    return false;
+  }
+}
+function safeLocalStorageRemove(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {}
+}
+function readLocalStorageJson(key, fallback) {
+  try {
+    const text = safeLocalStorageGet(key, "");
+    if (!text) return clone(fallback);
+    return JSON.parse(text);
+  } catch {
+    return clone(fallback);
+  }
+}
 let data = loadLocal();
 let currentMember = data.members[0] || "成员A";
 let currentDate = dateKeyFromDate(new Date());
@@ -80,7 +131,7 @@ let activeReportSource = "current";
 let sourceDatasets = [];
 let mergedSourceDataset = null;
 let reportDataOverride = null;
-let overviewSelectedGroups = JSON.parse(localStorage.getItem("dailyReportOverviewGroups") || "[]");
+let overviewSelectedGroups = readLocalStorageJson("dailyReportOverviewGroups", []);
 let analysisTableMember = "";
 let overviewRangeMode = "day";
 let overviewDetailGroup = "";
@@ -106,7 +157,7 @@ let pendingCloudRecordKeys = new Set();
 let adminUnlocked = false;
 let showAllEntryItems = false;
 let appUnlocked = false;
-let collapsedGroups = JSON.parse(localStorage.getItem("dailyReportCollapsedGroups") || "{}");
+let collapsedGroups = readLocalStorageJson("dailyReportCollapsedGroups", {});
 let lastTypingAt = 0;
 let sharedReplicaCount = 0;
 let cloudSyncEndpoint = loadCloudSyncEndpoint();
@@ -199,12 +250,12 @@ const cloudDbQuotaPauseMs = 6 * 60 * 60 * 1000;
 const sharedReplicaDirName = "daily_report_clients";
 const clientId = loadClientId();
 function loadClientId() {
-  const saved = localStorage.getItem("dailyReportClientId");
+  const saved = safeLocalStorageGet("dailyReportClientId", "");
   if (saved) return saved;
   const next = typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : `client_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  localStorage.setItem("dailyReportClientId", next);
+  safeLocalStorageSet("dailyReportClientId", next);
   return next;
 }
 function normalizeCloudSyncEndpoint(value) {
@@ -216,12 +267,12 @@ function normalizeCloudSyncEndpoint(value) {
   return text.replace(/\/+$/, "");
 }
 function loadCloudSyncEndpoint() {
-  return normalizeCloudSyncEndpoint(localStorage.getItem("dailyReportCloudSyncEndpoint") || "");
+  return normalizeCloudSyncEndpoint(safeLocalStorageGet("dailyReportCloudSyncEndpoint", ""));
 }
 function saveCloudSyncEndpoint(value) {
   cloudSyncEndpoint = normalizeCloudSyncEndpoint(value);
-  if (cloudSyncEndpoint) localStorage.setItem("dailyReportCloudSyncEndpoint", cloudSyncEndpoint);
-  else localStorage.removeItem("dailyReportCloudSyncEndpoint");
+  if (cloudSyncEndpoint) safeLocalStorageSet("dailyReportCloudSyncEndpoint", cloudSyncEndpoint);
+  else safeLocalStorageRemove("dailyReportCloudSyncEndpoint");
   syncCloudEndpointInputs();
   renderSyncPanel();
   return cloudSyncEndpoint;
@@ -230,7 +281,7 @@ function setCloudSyncEndpointFromEnv(value) {
   cloudSyncEndpointFromEnv = normalizeCloudSyncEndpoint(value);
   if (!loadCloudSyncEndpoint()) {
     cloudSyncEndpoint = cloudSyncEndpointFromEnv;
-    if (cloudSyncEndpointFromEnv) localStorage.setItem("dailyReportCloudSyncEndpoint", cloudSyncEndpointFromEnv);
+    if (cloudSyncEndpointFromEnv) safeLocalStorageSet("dailyReportCloudSyncEndpoint", cloudSyncEndpointFromEnv);
   }
   syncCloudEndpointInputs();
   renderSyncPanel();
@@ -550,49 +601,112 @@ function normalize(source) {
 }
 function loadLocal() {
   try {
-    const saved = JSON.parse(localStorage.getItem("dailyReportData") || "null");
-    return normalize(saved);
+    const text = safeLocalStorageGet(localDataStorageKey, "");
+    if (!text) return clone(defaultData);
+    return normalize(JSON.parse(text));
   } catch {
     return clone(defaultData);
   }
 }
+function isPinnedBackupLabel(label = "") {
+  return /周备份|月备份|配置|恢复|导入/.test(String(label || ""));
+}
+function compactLocalBackups(items = []) {
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  const keepLimit = data?.backupCleanupEnabled ? Math.max(localBackupMaxCount, 12) : localBackupMaxCount;
+  const cleaned = (Array.isArray(items) ? items : [])
+    .filter((item) => item && typeof item === "object" && item.data && item.created_at)
+    .filter((item) => {
+      if (!data?.backupCleanupEnabled) return true;
+      if (isPinnedBackupLabel(item.label)) return true;
+      const time = new Date(item.created_at).getTime();
+      return Number.isFinite(time) && time >= cutoff;
+    })
+    .sort((a, b) => (new Date(b.created_at).getTime() || 0) - (new Date(a.created_at).getTime() || 0))
+    .slice(0, keepLimit);
+  let next = cleaned;
+  while (next.length > 1 && JSON.stringify(next).length > localBackupSoftLimitChars) {
+    next = next.slice(0, -1);
+  }
+  if (JSON.stringify(next).length > localBackupSoftLimitChars) return [];
+  return next;
+}
 function readBackups() {
   try {
-    const items = JSON.parse(localStorage.getItem("dailyReportBackups") || "[]");
-    return Array.isArray(items) ? items : [];
+    const text = safeLocalStorageGet(localBackupStorageKey, "[]");
+    if (!text) return [];
+    if (text.length > localBackupSoftLimitChars * 2) {
+      noteLocalStoragePressure("本地旧备份过大，已跳过读取并等待瘦身");
+      return [];
+    }
+    const items = JSON.parse(text || "[]");
+    return Array.isArray(items) ? compactLocalBackups(items) : [];
   } catch {
     return [];
   }
 }
 function writeBackups(items) {
-  localStorage.setItem("dailyReportBackups", JSON.stringify(items));
+  const next = compactLocalBackups(items);
+  const text = JSON.stringify(next);
+  if (text.length > localBackupSoftLimitChars) {
+    safeLocalStorageRemove(localBackupStorageKey);
+    noteLocalStoragePressure("本地历史备份过大，已清理旧小备份；主数据仍在本机保险库");
+    return [];
+  }
+  if (safeLocalStorageSet(localBackupStorageKey, text, "本地历史备份写入失败，已减少备份数量")) return next;
+  const fallback = compactLocalBackups(next.slice(0, 2));
+  if (safeLocalStorageSet(localBackupStorageKey, JSON.stringify(fallback), "本地历史备份已压缩到最近 2 份")) return fallback;
+  safeLocalStorageRemove(localBackupStorageKey);
+  return [];
 }
 function pruneBackups() {
-  if (!data?.backupCleanupEnabled) return;
-  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
-  writeBackups(readBackups().filter((item) => {
-    if (/周备份|月备份|配置|恢复/.test(item.label || "")) return true;
-    return new Date(item.created_at).getTime() >= cutoff;
-  }).slice(0, 120));
+  const backups = readBackups();
+  if (!backups.length) {
+    safeLocalStorageRemove(localBackupStorageKey);
+    return;
+  }
+  writeBackups(backups);
 }
 function createBackup(label = "自动备份") {
   pruneBackups();
-  const backups = readBackups();
   const today = new Date().toISOString().slice(0, 10);
+  const backups = readBackups();
   const last = backups[0];
-  if (last && last.label === label && last.created_at.slice(0, 10) === today) return;
+  if (last && last.label === label && String(last.created_at || "").slice(0, 10) === today) return;
+  const snapshotText = JSON.stringify(data);
+  if (snapshotText.length > Math.floor(localBackupSoftLimitChars * 0.75)) {
+    safeLocalStorageRemove(localBackupStorageKey);
+    noteLocalStoragePressure("团队数据较大，已跳过浏览器小备份；主数据仍会保存到本机保险库");
+    return;
+  }
   backups.unshift({
     id: `${Date.now()}`,
     created_at: new Date().toISOString(),
     label,
-    data: clone(data)
+    data: JSON.parse(snapshotText)
   });
-  writeBackups(backups.slice(0, 80));
+  writeBackups(backups);
 }
 function persistLocal() {
   mergedSourceDataset = null;
   data.updated_at = new Date().toISOString();
-  localStorage.setItem("dailyReportData", JSON.stringify(data));
+  const text = JSON.stringify(data);
+  persistIndexedDbData(text, data.updated_at);
+  if (text.length <= localDataSoftLimitChars) {
+    let wrote = safeLocalStorageSet(localDataStorageKey, text, "浏览器主缓存写入失败，主数据仍会写入 IndexedDB 本机保险库");
+    if (!wrote) {
+      safeLocalStorageRemove(localBackupStorageKey);
+      wrote = safeLocalStorageSet(localDataStorageKey, text, "已清理过大的本地小备份，主数据继续保存");
+    }
+    if (wrote && !localStoragePressure) localStorageStatusText = "正常";
+  } else {
+    noteLocalStoragePressure("主数据较大，已转入 IndexedDB 本机保险库");
+    safeLocalStorageSet(localDataOverflowKey, JSON.stringify({
+      stored: "indexedDB",
+      updated_at: data.updated_at,
+      record_count: Object.keys(data.records || {}).length
+    }));
+  }
   pruneBackups();
   renderSyncPanel();
 }
@@ -1073,11 +1187,139 @@ async function persistEverywhere(mode = "records") {
 }
 function openCloudDb() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("dailyReportCloud", 1);
-    request.onupgradeneeded = () => request.result.createObjectStore("handles");
+    if (!("indexedDB" in window)) {
+      reject(new Error("IndexedDB unavailable"));
+      return;
+    }
+    const request = indexedDB.open("dailyReportCloud", 2);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains("handles")) db.createObjectStore("handles");
+      if (!db.objectStoreNames.contains(indexedStoreName)) db.createObjectStore(indexedStoreName);
+    };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+function dataUpdatedRank(report) {
+  const time = Date.parse(report?.updated_at || "");
+  return Number.isNaN(time) ? 0 : time;
+}
+function reportRecordCount(report) {
+  return Object.keys(report?.records || {}).length;
+}
+async function putIndexedValue(key, value) {
+  const db = await openCloudDb();
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(indexedStoreName, "readwrite");
+      transaction.objectStore(indexedStoreName).put(value, key);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error("IndexedDB write failed"));
+      transaction.onabort = () => reject(transaction.error || new Error("IndexedDB write aborted"));
+    });
+  } finally {
+    db.close?.();
+  }
+}
+async function getIndexedValue(key) {
+  const db = await openCloudDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const transaction = db.transaction(indexedStoreName, "readonly");
+      const request = transaction.objectStore(indexedStoreName).get(key);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error("IndexedDB read failed"));
+      transaction.onerror = () => reject(transaction.error || new Error("IndexedDB transaction failed"));
+    });
+  } finally {
+    db.close?.();
+  }
+}
+function persistIndexedDbData(text, updatedAt) {
+  if (!text) return Promise.resolve();
+  const item = {
+    text,
+    updated_at: updatedAt || new Date().toISOString(),
+    saved_at: new Date().toISOString(),
+    record_count: Object.keys(data.records || {}).length
+  };
+  indexedDbPersistChain = indexedDbPersistChain
+    .catch(() => {})
+    .then(() => putIndexedValue(localDataStorageKey, item))
+    .then(() => {
+      indexedDbStatusText = `已保存 ${new Date().toLocaleTimeString("zh-CN")}`;
+      renderSyncPanel();
+    })
+    .catch((error) => {
+      indexedDbStatusText = `本机保险库失败：${error?.message || "未知错误"}`;
+      renderSyncPanel();
+    });
+  return indexedDbPersistChain;
+}
+function queueIndexedDbDataWrite(text, updatedAt) {
+  if (!text) return;
+  window.clearTimeout(indexedDbPersistTimer);
+  indexedDbPersistTimer = window.setTimeout(() => persistIndexedDbData(text, updatedAt), 120);
+}
+async function hydrateLocalDataFromIndexedDb() {
+  let stored = null;
+  try {
+    stored = await getIndexedValue(localDataStorageKey);
+  } catch (error) {
+    indexedDbStatusText = `本机保险库不可用：${error?.message || "未知错误"}`;
+    renderSyncPanel();
+    return false;
+  }
+  const currentText = safeLocalStorageGet(localDataStorageKey, "");
+  const currentCount = reportRecordCount(data);
+  if (!stored?.text) {
+    if (currentText) {
+      queueIndexedDbDataWrite(currentText, data.updated_at);
+      indexedDbStatusText = "已迁移旧浏览器缓存";
+    } else {
+      indexedDbStatusText = "暂无本机保险库数据";
+    }
+    renderSyncPanel();
+    return false;
+  }
+  let storedData;
+  try {
+    storedData = normalize(JSON.parse(stored.text));
+  } catch {
+    indexedDbStatusText = "本机保险库数据损坏，仍使用当前草稿";
+    renderSyncPanel();
+    return false;
+  }
+  const storedCount = reportRecordCount(storedData);
+  const currentRank = dataUpdatedRank(data);
+  const storedRank = dataUpdatedRank(storedData) || Date.parse(stored.updated_at || "") || 0;
+  if (!currentCount || storedRank >= currentRank || storedCount > currentCount) {
+    const mergeMode = storedRank >= currentRank ? "records" : "admin";
+    data = mergeCloudData(storedData, data, mergeMode);
+    ensureCurrentMemberVisible();
+    loadForm();
+    render();
+    setView(activeView);
+    const nextText = JSON.stringify(data);
+    queueIndexedDbDataWrite(nextText, data.updated_at || stored.updated_at);
+    if (nextText.length <= localDataSoftLimitChars) {
+      safeLocalStorageSet(localDataStorageKey, nextText, "已从 IndexedDB 恢复，浏览器主缓存写入失败但不影响本机保险库");
+    } else {
+      safeLocalStorageSet(localDataOverflowKey, JSON.stringify({
+        stored: "indexedDB",
+        updated_at: data.updated_at,
+        record_count: reportRecordCount(data)
+      }));
+    }
+    indexedDbStatusText = `已恢复 ${storedCount} 条`;
+    renderSyncPanel();
+    return true;
+  }
+  queueIndexedDbDataWrite(JSON.stringify(data), data.updated_at);
+  indexedDbStatusText = `已就绪 ${currentCount} 条`;
+  renderSyncPanel();
+  return false;
 }
 async function saveCloudDirectory(dir) {
   try {
@@ -1364,6 +1606,7 @@ function renderSyncPanel() {
     <div><span>后台刷新</span><strong>${escapeHtml(syncStatusText)}</strong></div>
     <div><span>云同步</span><strong>${escapeHtml(provider)} · ${escapeHtml(cloudDbStatusText)}</strong></div>
     <div><span>本地草稿</span><strong>${recordCount} 条 · ${escapeHtml(cachedAt)}</strong></div>
+    <div><span>本机存储</span><strong>${escapeHtml(localStorageStatusText)} · ${escapeHtml(indexedDbStatusText)}</strong></div>
     <div><span>同步状态</span><strong>${escapeHtml(syncMode)}</strong></div>
   `;
 }
@@ -1378,7 +1621,10 @@ function cloudDataMetaText(meta) {
 }
 function isQuotaError(error) {
   const text = `${error?.message || ""} ${JSON.stringify(error?.payload || {})}`.toLowerCase();
-  return Number(error?.status || 0) === 402 || /quota|额度|transfer/.test(text);
+  const status = Number(error?.status || 0);
+  return status === 402
+    || /quota|额度|transfer|maximum.*db.*size|maximum.*database.*size|database.*size|storage.*limit|exceeded maximum db size/.test(text)
+    || (status >= 500 && /1101|non-json|非\s*json|非json|maximum.*db.*size|database.*size|storage.*limit/.test(text));
 }
 function isCloudDbQuotaPaused() {
   return cloudDbQuotaPausedUntil > Date.now();
@@ -1584,9 +1830,8 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
     setCloudDbStatus(cloudDbQuotaMessage(), cloudDbLastMeta);
     return { written: false, reason: "cloud-quota-paused" };
   }
-  try {
-    const payloadData = compactCloudSyncData(mode);
-    const result = await callCloudData("save", { data: payloadData, mode, actor: currentMember }, appSessionPassword);
+  const payloadData = compactCloudSyncData(mode);
+  const applySaveResult = (result) => {
     if (result.data) {
       data = mergeCloudData(result.data, data, "records");
       persistLocal();
@@ -1596,14 +1841,29 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
     if (mode === "records") pendingCloudRecordKeys.clear();
     setCloudDbStatus(`已写入${cloudSyncProviderLabel()} · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta || null);
     return { written: true, meta: result.meta || null };
+  };
+  try {
+    return applySaveResult(await callCloudData("save", { data: payloadData, mode, actor: currentMember }, appSessionPassword));
   } catch (error) {
-    if (isQuotaError(error)) return { written: false, ...pauseCloudDbForQuota(error) };
+    if (isQuotaError(error)) {
+      const cleaned = await cleanupCloudSyncDatabase(true);
+      if (cleaned.cleaned) {
+        try {
+          return applySaveResult(await callCloudData("save", { data: payloadData, mode, actor: currentMember }, appSessionPassword));
+        } catch (retryError) {
+          if (isQuotaError(retryError)) return { written: false, ...pauseCloudDbForQuota(retryError) };
+          setCloudDbStatus(`写入失败：${retryError.message}`);
+          if (!silent) alert(`${cloudSyncProviderLabel()}写入失败：${retryError.message}`);
+          return { written: false, reason: retryError.message };
+        }
+      }
+      return { written: false, ...pauseCloudDbForQuota(error) };
+    }
     setCloudDbStatus(`写入失败：${error.message}`);
     if (!silent) alert(`${cloudSyncProviderLabel()}写入失败：${error.message}`);
     return { written: false, reason: error.message };
   }
-}
-async function syncCloudDatabaseIfChanged({ silent = true } = {}) {
+}async function syncCloudDatabaseIfChanged({ silent = true } = {}) {
   await ensureCloudSyncConfig();
   if (!cloudDatabaseAvailable() || !appSessionPassword) return { pulled: false, reason: "not-ready" };
   if (isCloudDbQuotaPaused()) {
@@ -1659,6 +1919,27 @@ async function refreshCloudHistory(silent = false) {
     if (!silent) showDialog("云端历史已刷新", `已读取最近 ${cloudHistoryEvents.length} 个云端历史版本。`, "");
   } catch (error) {
     if (!silent) alert(`读取云端历史失败：${error.message}`);
+  }
+}
+async function cleanupCloudSyncDatabase(silent = false) {
+  if (!appSessionPassword) {
+    setCloudDbStatus(`未登录，不能清理${cloudSyncProviderLabel()}`);
+    if (!silent) alert("请先输入应用密码，再清理云端历史。");
+    return { cleaned: false, reason: "missing-token" };
+  }
+  try {
+    setCloudDbStatus("正在清理云端历史快照...");
+    const result = await callCloudData("cleanup", { keep: 0 }, appSessionPassword);
+    clearCloudDbQuotaPause();
+    cloudHistoryEvents = [];
+    renderCloudHistoryPanel();
+    setCloudDbStatus(`云端历史已瘦身 · ${new Date().toLocaleTimeString("zh-CN")}`, result.meta || cloudDbLastMeta);
+    if (!silent) showDialog("云端瘦身完成", "已清理 Cloudflare Worker 的历史快照，并保留最新团队数据。现在可以重新提交一次。", "");
+    return { cleaned: true, result };
+  } catch (error) {
+    setCloudDbStatus(`云端瘦身失败：${error.message}`);
+    if (!silent) alert(`云端瘦身失败：${error.message}`);
+    return { cleaned: false, error };
   }
 }
 async function restoreCloudHistory() {
@@ -2112,7 +2393,7 @@ function renderOverviewGroupPicker(report = reportData()) {
           .filter((group) => group && group !== "__all__");
         overviewSelectedGroups = checked.length === groups.length ? [] : checked;
       }
-      localStorage.setItem("dailyReportOverviewGroups", JSON.stringify(overviewSelectedGroups));
+      safeLocalStorageSet("dailyReportOverviewGroups", JSON.stringify(overviewSelectedGroups));
       renderOverview();
     };
   });
@@ -2943,7 +3224,7 @@ function renderMembers() {
     `;
     box.ontoggle = () => {
       collapsedGroups[group] = !box.open;
-      localStorage.setItem("dailyReportCollapsedGroups", JSON.stringify(collapsedGroups));
+      safeLocalStorageSet("dailyReportCollapsedGroups", JSON.stringify(collapsedGroups));
     };
     members.forEach((name) => {
       const todayQuota = memberQuota(name, currentDate);
@@ -8344,6 +8625,7 @@ function bindEvents() {
   };
   $("cloudHistoryRefreshBtn").onclick = () => refreshCloudHistory(false);
   $("cloudHistoryRestoreBtn").onclick = () => restoreCloudHistory().catch((err) => alert(`恢复云端历史失败：${err.message}`));
+  $("cloudSyncCleanupBtn").onclick = () => cleanupCloudSyncDatabase(false);
   $("exportBtn").onclick = exportData;
   $("syncTodayToMixedBtn").onclick = syncTodayToMixedTable;
   $("copyMixedSummaryBtn").onclick = copyMixedSummaryText;
@@ -8388,16 +8670,25 @@ function bindEvents() {
     if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) markUserTyping();
   }, true);
 }
-pruneBackups();
-createBackup("每日自动备份");
+async function bootStorageAndSync() {
+  try {
+    await hydrateLocalDataFromIndexedDb();
+  } catch (error) {
+    indexedDbStatusText = `本机保险库读取失败：${error?.message || "未知错误"}`;
+    renderSyncPanel();
+  }
+  pruneBackups();
+  createBackup("每日自动备份");
+  restoreCloudDirectory();
+  loadCloudSyncConfig().then(() => refreshCloudDatabaseStatus(true));
+  refreshCloudBackupStatus(true);
+  startCloudPolling();
+}
 bindEvents();
 loadForm();
 render();
 setView(activeView);
-restoreCloudDirectory();
-loadCloudSyncConfig().then(() => refreshCloudDatabaseStatus(true));
-refreshCloudBackupStatus(true);
-startCloudPolling();
+bootStorageAndSync();
 window.addEventListener("focus", () => {
   pollSharedFile(true);
   if (appUnlocked) syncCloudDatabaseIfChanged({ silent: true }).catch(() => {});

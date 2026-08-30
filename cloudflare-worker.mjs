@@ -586,6 +586,9 @@ async function optimizeDatabase(db) {
   try {
     await db.prepare("PRAGMA optimize").run();
   } catch {}
+  try {
+    await db.prepare("VACUUM").run();
+  } catch {}
 }
 
 async function pruneEvents(db, keepCount = cloudEventKeepCount) {
