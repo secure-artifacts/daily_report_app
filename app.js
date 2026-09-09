@@ -1623,8 +1623,7 @@ function isQuotaError(error) {
   const text = `${error?.message || ""} ${JSON.stringify(error?.payload || {})}`.toLowerCase();
   const status = Number(error?.status || 0);
   return status === 402
-    || /quota|额度|transfer|maximum.*db.*size|maximum.*database.*size|database.*size|storage.*limit|exceeded maximum db size/.test(text)
-    || (status >= 500 && /1101|non-json|非\s*json|非json|maximum.*db.*size|database.*size|storage.*limit/.test(text));
+    || /(?:exceeded|exhausted|reached).*(?:quota|storage limit)|quota.*(?:exceeded|exhausted)|额度.*(?:已满|用尽|超)|exceeded maximum (?:db|database) size/.test(text);
 }
 function isCloudDbQuotaPaused() {
   return cloudDbQuotaPausedUntil > Date.now();
@@ -1637,12 +1636,14 @@ function cloudDbPauseRemainingText() {
   const hours = Math.ceil(minutes / 60);
   return `${hours} 小时`;
 }
+let cloudDbQuotaLastError = "";
 function cloudDbQuotaMessage() {
-  return `云数据库额度已满或暂时不可用，已暂停自动同步，本地草稿安全保留。请恢复云同步服务后再同步。`;
+  return `云服务返回额度限制，已暂停自动同步。原始错误：${cloudDbQuotaLastError || "未知"}。可保存备用云地址后重新连接。`;
 }
 function pauseCloudDbForQuota(error) {
   cloudDbQuotaPausedUntil = Date.now() + cloudDbQuotaPauseMs;
-  window.clearInterval(cloudDbPollTimer);
+  cloudDbQuotaLastError = error?.message || "";
+  startCloudDbPolling();
   setCloudDbStatus(cloudDbQuotaMessage(), cloudDbLastMeta);
   return { pulled: false, written: false, paused: true, reason: "cloud-quota-paused", error: error?.message || "" };
 }
@@ -1846,7 +1847,8 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
     return applySaveResult(await callCloudData("save", { data: payloadData, mode, actor: currentMember }, appSessionPassword));
   } catch (error) {
     if (isQuotaError(error)) {
-      const cleaned = await cleanupCloudSyncDatabase(true);
+      const storageFull = /exceeded maximum (?:db|database) size/i.test(error?.message || "");
+      const cleaned = storageFull ? await cleanupCloudSyncDatabase(true) : { cleaned: false };
       if (cleaned.cleaned) {
         try {
           return applySaveResult(await callCloudData("save", { data: payloadData, mode, actor: currentMember }, appSessionPassword));
@@ -1863,7 +1865,8 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
     if (!silent) alert(`${cloudSyncProviderLabel()}写入失败：${error.message}`);
     return { written: false, reason: error.message };
   }
-}async function syncCloudDatabaseIfChanged({ silent = true } = {}) {
+}
+async function syncCloudDatabaseIfChanged({ silent = true } = {}) {
   await ensureCloudSyncConfig();
   if (!cloudDatabaseAvailable() || !appSessionPassword) return { pulled: false, reason: "not-ready" };
   if (isCloudDbQuotaPaused()) {
@@ -1895,7 +1898,7 @@ async function saveCloudDatabaseData(mode = "records", silent = false) {
 }
 function startCloudDbPolling() {
   window.clearInterval(cloudDbPollTimer);
-  if (!appSessionPassword || !cloudDatabaseAvailable() || isCloudDbQuotaPaused()) return;
+  if (!appSessionPassword || !cloudDatabaseAvailable()) return;
   cloudDbPollTimer = window.setInterval(() => {
     syncCloudDatabaseIfChanged({ silent: true }).catch(() => {});
   }, cloudDbPollMs);
@@ -5860,6 +5863,7 @@ function updateCloudSyncEndpointFromAdmin(clear = false) {
   cloudDbLastSeenSha = "";
   cloudDbQuotaPausedUntil = 0;
   refreshCloudDatabaseStatus(true);
+  startCloudDbPolling();
   showDialog(clear ? "备用云地址已清空" : "备用云地址已保存", clear ? (cloudSyncEndpoint ? `已清空本机手动地址，当前使用 Vercel 环境变量下发的 Worker 地址：${cloudSyncEndpoint}` : "当前没有 Worker 地址，云同步会回到 Vercel 默认接口。") : `当前云同步会优先连接：${cloudSyncEndpoint}`, "");
 }
 async function chooseSharedFile() {
