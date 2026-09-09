@@ -1525,7 +1525,7 @@ function isActiveTypingWindow() {
 function setSyncStatus(message, location = cloudLocationLabel) {
   syncStatusText = message || syncStatusText;
   cloudLocationLabel = location || cloudLocationLabel;
-  if ($("syncLabel")) $("syncLabel").textContent = cloudLocationLabel ? `${syncStatusText}：${cloudLocationLabel}` : syncStatusText;
+  renderSyncLabel();
   renderSyncPanel();
 }
 function reportData() {
@@ -1589,7 +1589,18 @@ function renderReportSourceTabs() {
     };
   });
 }
+function renderSyncLabel() {
+  const label = $("syncLabel");
+  if (!label) return;
+  if (appSessionPassword && cloudDatabaseAvailable()) {
+    label.textContent = `${cloudSyncProviderLabel()} · ${cloudDbStatusText}`;
+  } else {
+    label.textContent = cloudLocationLabel ? `${syncStatusText}：${cloudLocationLabel}` : syncStatusText;
+  }
+  label.title = label.textContent;
+}
 function renderSyncPanel() {
+  renderSyncLabel();
   const box = $("syncStatusBox");
   if (!box) return;
   const cachedAt = data.updated_at ? new Date(data.updated_at).toLocaleString("zh-CN") : "暂无";
@@ -1597,7 +1608,7 @@ function renderSyncPanel() {
   const connected = Boolean(fileHandle || desktopApp?.isDesktop);
   const quotaPaused = isCloudDbQuotaPaused();
   const provider = cloudSyncProviderLabel();
-  const dbReady = Boolean(appSessionPassword && cloudDatabaseAvailable() && !quotaPaused && !/未配置|失败|不可用|额度|暂停|未登录/.test(cloudDbStatusText));
+  const dbReady = Boolean(appSessionPassword && cloudDatabaseAvailable() && !quotaPaused && /^(已读取|已写入|云库无新变化)/.test(cloudDbStatusText));
   const syncMode = quotaPaused
     ? `云库额度暂停 · 约 ${cloudDbPauseRemainingText()} 后重试`
     : (dbReady ? `${provider}主同步 · ${cloudDbPollMs / 1000} 秒轻量检查` : (connected ? `${syncPollMs / 1000} 秒刷新` : "未连接时不会进入团队总数据"));
