@@ -185,12 +185,13 @@ function normalizeRecordMap(records = {}, rules = defaultData.rules) {
 }
 
 function normalize(loaded = {}) {
+  const { records: sourceRecords, ...settings } = loaded || {};
   const rules = loaded.rules && typeof loaded.rules === "object" ? clone(loaded.rules) : clone(defaultData.rules);
   const groups = Array.isArray(loaded.groups) && loaded.groups.length ? loaded.groups.map(String) : clone(defaultData.groups);
   const members = Array.isArray(loaded.members) && loaded.members.length ? loaded.members.map(String) : clone(defaultData.members);
   return {
     ...clone(defaultData),
-    ...clone(loaded || {}),
+    ...clone(settings),
     rules,
     totalConversionRules: loaded.totalConversionRules && typeof loaded.totalConversionRules === "object" ? clone(loaded.totalConversionRules) : {},
     groups,
@@ -460,8 +461,7 @@ function dataStats(data) {
   };
 }
 
-async function digestData(data) {
-  const bytes = new TextEncoder().encode(JSON.stringify(data));
+async function digestData(data, bytes = new TextEncoder().encode(JSON.stringify(data))) {
   const hash = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -496,10 +496,9 @@ async function encryptionKey(env) {
   return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 
-async function encodeStoredData(data, env) {
+async function encodeStoredData(data, env, plaintext = new TextEncoder().encode(JSON.stringify(data))) {
   const key = await encryptionKey(env);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify(data));
   const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
   return JSON.stringify({
     encrypted: true,
@@ -628,12 +627,13 @@ function latestStateStatement(db, now, normalized, source, stats, sha, serialize
   `).bind(now, normalized.updated_at || now, source, stats.recordCount, stats.memberCount, stats.groupCount, sha, serialized);
 }
 
-async function writeState(db, env, nextData, source = "team-sync", actor = "", mode = "records") {
-  const normalized = normalize(nextData);
+async function writeState(db, env, nextData, source = "team-sync", actor = "", mode = "records", alreadyNormalized = false) {
+  const normalized = alreadyNormalized ? nextData : normalize(nextData);
   normalized.updated_at = new Date().toISOString();
   const now = new Date().toISOString();
-  const serialized = await encodeStoredData(normalized, env);
-  const sha = await digestData(normalized);
+  const plaintext = new TextEncoder().encode(JSON.stringify(normalized));
+  const serialized = await encodeStoredData(normalized, env, plaintext);
+  const sha = await digestData(normalized, plaintext);
   const stats = dataStats(normalized);
   let eventId = "";
   let prunedEvents = 0;
@@ -752,7 +752,7 @@ async function handleCloudData(request, env) {
     }
     const state = await readState(env.DB, env, true);
     const merged = mergeCloudData(state?.data || null, body.data, body.mode === "admin" ? "admin" : "records");
-    return json({ ok: true, ...(await writeState(env.DB, env, merged, body.mode === "admin" ? "admin-sync" : "team-sync", body.actor || "", body.mode === "admin" ? "admin" : "records")) });
+    return json({ ok: true, ...(await writeState(env.DB, env, merged, body.mode === "admin" ? "admin-sync" : "team-sync", body.actor || "", body.mode === "admin" ? "admin" : "records", true)) });
   }
   return json({ ok: false, error: "未知云同步动作。" }, 400);
 }
