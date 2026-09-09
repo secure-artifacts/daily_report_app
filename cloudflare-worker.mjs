@@ -472,15 +472,17 @@ function encryptionSecret(env) {
 
 function bytesToBase64(bytes) {
   let binary = "";
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
   return btoa(binary);
 }
 
 function base64ToBytes(text) {
   const binary = atob(String(text || ""));
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 async function encryptionKey(env) {
@@ -606,7 +608,6 @@ async function pruneEvents(db, keepCount = cloudEventKeepCount) {
       )
     `).bind(keep).run();
   }
-  await optimizeDatabase(db);
   return Number(result?.meta?.changes ?? 0);
 }
 
