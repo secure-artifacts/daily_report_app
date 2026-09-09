@@ -1658,6 +1658,20 @@ function setCloudDbStatus(message, meta) {
   renderSyncPanel();
 }
 async function callCloudData(action, payload = {}, token = appSessionPassword) {
+  const readOnly = ["meta", "pull", "history"].includes(action);
+  const attempts = readOnly ? 3 : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await callCloudDataOnce(action, payload, token, readOnly);
+    } catch (error) {
+      const transient = !error.status || error.status === 408 || error.status >= 500;
+      if (!transient || isQuotaError(error) || attempt === attempts - 1) throw error;
+      setCloudDbStatus(`云连接暂未成功，正在重试（${attempt + 2}/${attempts}）：${error.message}`);
+      await new Promise(resolve => window.setTimeout(resolve, (attempt + 1) * 2000));
+    }
+  }
+}
+async function callCloudDataOnce(action, payload = {}, token = appSessionPassword, readOnly = false) {
   await ensureCloudSyncConfig();
   if (!cloudDatabaseAvailable()) throw new Error("请通过 Vercel、本地开发服务器打开网页，或填写 Cloudflare Worker 备用云同步地址。");
   const syncToken = String(token || appSessionPassword || "").trim();
@@ -1665,6 +1679,7 @@ async function callCloudData(action, payload = {}, token = appSessionPassword) {
   const response = await fetch(cloudApiUrl("/api/cloud-data"), {
     method: "POST",
     cache: "no-store",
+    ...(readOnly ? { signal: AbortSignal.timeout(15000) } : {}),
     headers: {
       "Content-Type": "application/json",
       "X-Team-Token": syncToken
@@ -5847,9 +5862,12 @@ async function unlockApp() {
     return;
   }
   appSessionPassword = password;
+  clearCloudDbQuotaPause();
   appUnlocked = true;
   $("lockScreen").classList.add("hidden");
   $("appPasswordInput").value = "";
+  startCloudDbPolling();
+  setCloudDbStatus("正在连接云端并读取数据...");
   await pullCloudDatabaseData({ silent: true });
   await refreshCloudHistory(true).catch(() => {});
   startCloudDbPolling();
